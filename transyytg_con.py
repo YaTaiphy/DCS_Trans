@@ -9,6 +9,8 @@ from deepseek import dptrans
 from extract import extract_specific_file, get_files
 import intract
 import multiprocessing
+
+from lua_reg import isMatchLua
 def foo():
     multiprocessing.freeze_support()
 
@@ -21,6 +23,7 @@ removeJson = False
 base_url = "https://api.deepseek.com"
 model = "deepseek-chat"
 hint = "你是一个翻译，下面是跟战斗机任务（DCS模拟飞行游戏）想关的英语，翻译成简体中文，不要使用markdown输出, 保持原文的换行格式，仅作为翻译不要续写，原文和翻译词数不能相差过大。"
+onlyChs = False
 
 
 def create_introduction():
@@ -36,6 +39,7 @@ def create_introduction():
         hint: 大模型翻译的提示语
         path: 任务文件夹路径
         remove: 翻译完成后是否删除json文件，默认值为False
+        onlyChs: 只输出中文，默认值为False，False表示输出原文和翻译后的文本，True表示只输出翻译后的文本
     3. 运行脚本，翻译完成后会在原文件夹下生成翻译后的json文件
     4. 翻译完成后如果需要删除json文件，请在配置文件中设置remove为True
     
@@ -57,7 +61,8 @@ def create_introduction():
         "model": "deepseek-chat",
         "hint": "dddddddddd\ndddddddddddddd\nddddddddddddddddddddddd",
         "remove": false,
-        "path": "E:/miz-translator\\back/"
+        "path": "E:/miz-translator\\back/",
+        "onlyChs": false
     }
     
     
@@ -152,6 +157,10 @@ def readAndTranslateJson(jsonPath):
             continue  # 跳过Name字段
         if "DictKey" in value:
             continue
+        if isMatchLua(value):
+            # 如果value是lua函数，则跳过翻译
+            print("value是lua函数跳过翻译：\n"+ value)
+            continue
         if len(value) < 2:
             jsonData[key]  = value + "\n" + value
             continue
@@ -176,7 +185,10 @@ def readAndTranslateJson(jsonPath):
                         save_translation_json()
                 
             # 原文本下换行然后加入翻译文本
-            if "Radio" in key:
+            if onlyChs:
+                # 如果只输出中文，则不添加原文本
+                jsonData[key] = translatedText
+            elif "Radio" in key:
                 # 如果是Radio类型的文本，则不添加换行符
                 jsonData[key] = value + translatedText
             else:
@@ -208,6 +220,7 @@ if __name__ == "__main__":
         hint = config["hint"]
         removeJson = config["remove"]
         mizPath = config["path"]
+        onlyChs = config["onlyChs"]
         
         
         print(f"API Key: {api_key}")
@@ -216,6 +229,7 @@ if __name__ == "__main__":
         print(f"提示语: {hint}")
         print(f"翻译文件夹路径: {mizPath}")
         print(f"翻译完成是否删除原文件: {removeJson}")
+        print(f"只输出中文: {onlyChs}")
         
         
         if not api_key or not mizPath:
