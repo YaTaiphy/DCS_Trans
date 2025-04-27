@@ -160,9 +160,9 @@ def readAndTranslateJson(jsonPath):
         if isMatchLua(value):
             # 如果value是lua函数，则跳过翻译
             print("value是lua函数跳过翻译：\n"+ value)
+            translatedJson[value] = ""
             continue
         if len(value) < 2:
-            jsonData[key]  = value + "\n" + value
             continue
         # 处理文本
         if isinstance(value, str):
