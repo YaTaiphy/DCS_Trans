@@ -1,3 +1,11 @@
+# 程序说明
+用于解包、大模型翻译、打包DCS（数字战斗模拟）的miz文件。
+
+# 程序需求
+1、有模型的调用api。
+
+2、使用的模型支持openai库框架下api调用。
+
 # 生成EXE说明
     python -m venv venv
     ./venv/Script/Activate.ps1
