@@ -27,9 +27,17 @@ def isMatchLua(text):
 
     
     pattern2 = r'[a-zA-Z_][a-zA-Z0-9_]*[.:][a-zA-Z0-9_]{2,}\([^)]*\)'
+
+    # 匹配 Lua 变量声明 + 表构造（如 `local x = {...}`）
+    pattern_lua_var = r'\blocal\s+[a-zA-Z_][\w]*\s*(?:=\s*(?:[^,\s;]+|\{[^\}]*\}|\"[^\"]*\"|\'[^\']*\'|function\s*\([^\)]*\)))?\b'
+
+    # 匹配 Lua 表构造（如 `{ ["key"] = value }`）
+    pattern_lua_table = r'\{\s*\[[\'"][^\]]+[\'"]\]\s*=\s*[^\}]+?\}'
+
+    pattern_DOEND = r"\bDo\b(.+?)\bEnd\b"
     
     
-    if re.search(pattern1, text) or re.search(pattern2, text):
+    if re.search(pattern1, text) or re.search(pattern2, text) or re.search(pattern_lua_var, text) or re.search(pattern_lua_table, text) or re.search(pattern_DOEND, text):
         return True
     else:
         return False
@@ -46,8 +54,14 @@ if __name__ == "__main__":
         "ab.1cd.ef",      # 无效（A以数字开头）
         ".X.",            # 无效（各部分长度不足）
         "() .(1) .(2)",  # 有效（特殊字符）
-        "N38.23.22"
-        "if (Unit.getByName(\"Steep\") and Unit.getByName(\"Steep\"):getFuel() < 0.05)"
+        "N38.23.22",
+        "if (Unit.getByName(\"Steep\") and Unit.getByName(\"Steep\"):getFuel() < 0.05)",
+        "-- Creats a UH-60 on the helipad of a Hazard perry.\n\nlocal staticObj = {\n    [\"name\"] = \"SEDLO BOW STATICS 2\", -- unit name (Name this something identifiable if you wish to remove it later)\n\n\n-- Copy and paste over this with the units information\n   ",
+        "local people going to do",
+        "locals",
+        "local a = 1",
+        "local a = 1, b = 2",
+        "local a",
     ]
 
     for text in test_cases:

@@ -8,7 +8,7 @@ import json
 import intract
 
 
-mizPath = "E:/miz-translator/back/1 - Deployed"  # 任务路径
+mizPath = "D:\\temp\\tq"  # 任务路径
 
 targetFileInZip = "l10n/DEFAULT/dictionary"
 
@@ -25,24 +25,6 @@ def get_files(mizPath):
 ## 解压缩文件
 import zipfile
 import os
-
-def lua_to_python_dict(lua_str):
-    # 移除Lua变量声明和注释
-    start = lua_str.find('{')
-    end = lua_str.rfind('}') + 1
-    dict_str = lua_str[start:end]
-    
-    # 替换Lua语法为Python语法
-    dict_str = dict_str.replace('[', '').replace(']', '')  # 移除方括号
-    dict_str = dict_str.replace('=', ':')  # 替换等号为冒号
-    
-    # 处理转义字符（Lua使用\\n，Python需要保持为\\n）
-    # 替换 \\n 为 \n（真正的换行符）
-    dict_str = dict_str.replace('\\n', '\n')
-    # 这里不需要额外处理，因为Python会正确解释字符串中的转义序列
-    
-    # 使用ast.literal_eval安全地评估字符串
-    return ast.literal_eval(dict_str)
 
 
 
@@ -64,6 +46,29 @@ def extract_and_rename(zip_path, target_file, new_name, output_dir='.'):
             with open(os.path.join(output_dir, new_name), 'wb') as file_out:
                 file_out.write(file_in_zip.read())
                 print(f"Extracted and renamed {target_file} to {new_name} in {output_dir}.")
+
+def find_dictkey_entries(input_string):
+    pattern =  r'\n\t\["DictKey_\w+"\]\s*=\s*'
+    matches = re.finditer(pattern, input_string, re.DOTALL)
+
+    startEnd = [(match.start(), match.end()) for match in matches]
+
+    entries = {}
+
+    for i in range(len(startEnd)):
+        key_start = startEnd[i][0] + 4
+        key_end = startEnd[i][1] - 5
+        if i != len(startEnd) - 1:
+            value_start = startEnd[i][1] + 1
+            value_end = startEnd[i + 1][0] - 2
+        else:
+            value_start = startEnd[i][1] + 1
+            value_end = len(input_string) - 4
+        key = input_string[key_start:key_end]
+        value = input_string[value_start:value_end]
+        entries[key] = value
+    return entries
+
 
 # 精确路径匹配提取
 def extract_specific_file(zip_path, target_path, new_name=None, output_dir='.'):
@@ -97,21 +102,23 @@ def extract_specific_file(zip_path, target_path, new_name=None, output_dir='.'):
         with zip_ref.open(matched_files[0]) as file_in_zip, \
              open(output_path, 'w', encoding='utf-8') as file_out:
             
-            dic_str = file_in_zip.read().decode('utf-8')
-            # parsed_dict = lua_to_python_dict(dic_str)
-            dic_str = re.search(r'\{([\s\S]*?)\}', dic_str).group(0)
-            pattern = r'\["(.*?)"\]\s*=\s*"(.*?)"(?=,|\n|\})'
-            matches = re.findall(pattern, dic_str, re.DOTALL)
+            dic_str = file_in_zip.read().decode('utf-8').replace('\\"', '"').replace('\\\n', '\n').replace('\\\\', '\\')
+            dic_str = re.search(r'\{([\s\S]*)\}', dic_str).group(0)
+            # pattern = r'\["(DictKey_\w+)"\]\s*=\s*"([\s\S]*?)"(?=,\n)'
+            # 使用正则表达式提取键值对
+            # pattern = r'\["(DictKey[\w_]+)"\]\s*=\s*"((?:\\"|[^"])*)"'
+            # matches = re.findall(pattern, dic_str, re.DOTALL)
+            # result = {}
+            # for key, value in matches:
+            #     # 处理转义字符：\" → ", \\n → \n
+            #     processed_value = (
+            #         value
+            #     )
+            #     result[key] = processed_value
+            # result_temp = json.dumps(result, indent=4, ensure_ascii=False)
+
             result = {}
-            for key, value in matches:
-                # 处理转义字符：\" → ", \\n → \n
-                processed_value = (
-                    value.replace('\\"', '"')
-                        .replace('\\\n', '\n')
-                        .replace('\\\\', '\\')  # 处理可能的 \\
-                )
-                result[key] = processed_value
-            result_temp = json.dumps(result, indent=4, ensure_ascii=False)
+            result = find_dictkey_entries(dic_str)
             json.dump(result, file_out, indent=4, ensure_ascii=False)
         
         return output_path

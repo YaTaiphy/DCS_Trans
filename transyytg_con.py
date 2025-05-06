@@ -88,7 +88,8 @@ def load_or_create_config():
             "remove": False,
             "model": model,
             "base_url": base_url,
-            "hint": hint
+            "hint": hint,
+            "onlyChs": False,
         }
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=4)
@@ -160,6 +161,11 @@ def readAndTranslateJson(jsonPath):
         if isMatchLua(value):
             # 如果value是lua函数，则跳过翻译
             print("value是lua函数跳过翻译：\n"+ value)
+            translatedJson[value] = ""
+            continue
+        if 'ctld' in value.lower() or 'moose' in value.lower() or 'mist' in value.lower():
+            # 如果value是ctld、moose、mist函数，则跳过翻译
+            print("value是ctld、moose、mist函数跳过翻译：\n"+ value)
             translatedJson[value] = ""
             continue
         if len(value) < 2:
