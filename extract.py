@@ -48,7 +48,7 @@ def extract_and_rename(zip_path, target_file, new_name, output_dir='.'):
                 print(f"Extracted and renamed {target_file} to {new_name} in {output_dir}.")
 
 def find_dictkey_entries(input_string):
-    pattern =  r'\n\t\["DictKey_\w+"\]\s*=\s*'
+    pattern =  r'\["DictKey_\w+"\]\s*=\s*'
     matches = re.finditer(pattern, input_string, re.DOTALL)
 
     startEnd = [(match.start(), match.end()) for match in matches]
@@ -56,16 +56,16 @@ def find_dictkey_entries(input_string):
     entries = {}
 
     for i in range(len(startEnd)):
-        key_start = startEnd[i][0] + 4
-        key_end = startEnd[i][1] - 5
+        key_start = startEnd[i][0]
+        key_end = startEnd[i][1]
         if i != len(startEnd) - 1:
-            value_start = startEnd[i][1] + 1
-            value_end = startEnd[i + 1][0] - 2
+            value_start = startEnd[i][1]
+            value_end = startEnd[i + 1][0] - 1
         else:
             value_start = startEnd[i][1] + 1
-            value_end = len(input_string) - 4
-        key = input_string[key_start:key_end]
-        value = input_string[value_start:value_end]
+            value_end = len(input_string) - 1
+        key = input_string[key_start:key_end].rstrip(' =').lstrip('[').rstrip(']').strip('"')
+        value = input_string[value_start:value_end].strip('\n \t').rstrip(',').strip('"')
         entries[key] = value
     return entries
 

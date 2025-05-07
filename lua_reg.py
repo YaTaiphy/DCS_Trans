@@ -29,7 +29,7 @@ def isMatchLua(text):
     pattern2 = r'[a-zA-Z_][a-zA-Z0-9_]*[.:][a-zA-Z0-9_]{2,}\([^)]*\)'
 
     # 匹配 Lua 变量声明 + 表构造（如 `local x = {...}`）
-    pattern_lua_var = r'\blocal\s+[a-zA-Z_][\w]*\s*(?:=\s*(?:[^,\s;]+|\{[^\}]*\}|\"[^\"]*\"|\'[^\']*\'|function\s*\([^\)]*\)))?\b'
+    pattern_lua_var = r'(?:^|;|\n)\s*local\s+[a-zA-Z_][a-zA-Z0-9_]*\s*(?:=\s*(?:[^,\s;]+|\{[^\}]*\}|\"[^\"]*\"|\'[^\']*\'|function\s*\([^\)]*\)))?\s*(?=[;\n]|$)'
 
     # 匹配 Lua 表构造（如 `{ ["key"] = value }`）
     pattern_lua_table = r'\{\s*\[[\'"][^\]]+[\'"]\]\s*=\s*[^\}]+?\}'
@@ -77,11 +77,11 @@ if __name__ == "__main__":
             print(key)
             translatedJson[key] = ""
             keys.append(key)
-        if "getByName" in key or "return true" in key or "destroy()" in key or "trigger.action" in key:
-            count += 1
-            print(key)
-    with open("./cache/translated.json", "w", encoding="utf-8") as f:
-        json.dump(translatedJson, f, ensure_ascii=False, indent=4)
+        # if "getByName" in key or "return true" in key or "destroy()" in key or "trigger.action" in key:
+        #     count += 1
+        #     print(key)
+    # with open("./cache/translated.json", "w", encoding="utf-8") as f:
+    #     json.dump(translatedJson, f, ensure_ascii=False, indent=4)
     print(len(keys))
     print(count)
     print("end")

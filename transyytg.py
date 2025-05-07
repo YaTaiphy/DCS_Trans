@@ -3,21 +3,17 @@ import os
 import argparse
 import json
 import threading
-import sys
 
 from deepseek import dptrans
 from extract import extract_specific_file, get_files
 import intract
 import multiprocessing
-
-from lua_reg import isMatchLua
 def foo():
     multiprocessing.freeze_support()
-# Create a lock for the shared dictionary
-translation_lock = threading.Lock()
 
 parser = argparse.ArgumentParser(description="一个命令行参数")
 
+api_key = None
 
 ## 创建./cache目录
 if not os.path.exists("./cache"):
@@ -47,6 +43,8 @@ except FileNotFoundError:
         json.dump(translatedJson, f, ensure_ascii=False, indent=4)
     
 
+# Create a lock for the shared dictionary
+translation_lock = threading.Lock()
 
 
 def get_jsonList(mizPath):
@@ -58,7 +56,7 @@ def get_jsonList(mizPath):
                 jsonList.append(os.path.join(root, file))
     return jsonList
 
-def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
+def readAndTranslateJson(jsonPath):
     count = 0
     # 读取json文件
     with open(jsonPath, "r", encoding="utf-8") as f:
@@ -75,12 +73,8 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
             continue  # 跳过Name字段
         if "DictKey" in value:
             continue
-        if isMatchLua(value):
-            # 如果value是lua函数，则跳过翻译
-            print("value是lua函数跳过翻译：\n"+ value)
-            translatedJson[value] = ""
-            continue
         if len(value) < 2:
+            jsonData[key]  = value + "\n" + value
             continue
         # 处理文本
         if isinstance(value, str):
@@ -90,17 +84,12 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
                 translatedText = translatedJson[value]
                 print("如果已经翻译过，则直接使用翻译后的文本：\n"+value + "\n" + translatedText)
             else:
-                try:
                 # 如果没有翻译过，则调用翻译函数
-                    translatedText = dptrans(text=value, api_key=api_key, base_url=base_url, model=model, hint=hint)
-                except Exception as e:
-                    print("翻译API调用出错")
-                    ex = Exception("翻译API调用出错", e)
-                    raise ex
+                translatedText = dptrans(value, api_key)
                 # 将翻译后的文本加入到translatedJson中，由于使用了concurrent.futures并发执行，因此需要加锁
                 # translatedJson[value] = translatedText
                 # 这里使用了一个简单的锁机制，实际使用中可以使用更复杂的锁机制 
-            # 将翻译后的文本加入到translatedJson中，使用锁保护共享字典
+                # 将翻译后的文本加入到translatedJson中，使用锁保护共享字典
                 with translation_lock:
                     translatedJson[value] = translatedText
                     # 定期保存翻译结果到文件
@@ -108,10 +97,7 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
                         save_translation_json()
                 
             # 原文本下换行然后加入翻译文本
-            if onlyChs:
-                # 如果只输出中文，则不添加原文本
-                jsonData[key] = translatedText
-            elif "Radio" in key:
+            if "Radio" in key:
                 # 如果是Radio类型的文本，则不添加换行符
                 jsonData[key] = value + translatedText
             else:
@@ -123,8 +109,25 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
     with open(jsonPath, "w", encoding="utf-8") as f:
         json.dump(jsonData, f, ensure_ascii=False, indent=4)  # indent=4表示缩进4个空格
     
-def transyytg_con(api_key, base_url, model, hint, removeJson, mizPath, onlyChs):
-
+ 
+    
+    ## 命令行输入相关路径，以参数的形式传入
+if __name__ == "__main__":
+    ## 命令行输入相关路径，以参数的形式传入
+    parser.add_argument("--api_key", type=str, help="DeepL API Key")
+    parser.add_argument("--path", type=str, help="Path to the mission files")
+    ## 帮助
+    # parser.add_argument("--help", action="help", help="input --api_key and --path\nFor example: xxx.exe --api_key YOUR_API_KEY --path E:/miz-translator/back/")
+    args = parser.parse_args()
+    if args.api_key:
+        api_key = args.api_key
+    else:
+        print("请在命令行中输入API Key")
+    if args.path:
+        mizPath = args.path
+    else:
+        print("请在命令行中输入任务文件夹路径")
+    
     # mizPath = "E:/miz-translator/back/"  # 任务路径
     targetFileInZip = "l10n/DEFAULT/dictionary"
     fileList = get_files(mizPath)
@@ -139,7 +142,7 @@ def transyytg_con(api_key, base_url, model, hint, removeJson, mizPath, onlyChs):
     
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    file_handler = logging.FileHandler("./cache/log.txt", mode='a', encoding="utf-8")
+    file_handler = logging.FileHandler("./log.txt", mode='a', encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
@@ -153,46 +156,29 @@ def transyytg_con(api_key, base_url, model, hint, removeJson, mizPath, onlyChs):
     jsonList = get_jsonList(jsonsPath)
     jsonList.sort()
     print(jsonList)  # 打印文件列表
-    try:
+    
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fileList), os.cpu_count() + 4)) as executor:
+        # 创建任务字典，用于跟踪任务
+        future_to_file = {}
+        
+        # 提交所有任务到线程池
         for file in jsonList:
-            print("处理文件")
-            readAndTranslateJson(file, api_key, base_url, model, hint, onlyChs)
-    except Exception as e:
-        print("处理文件时出错")
-        ex = Exception("处理文件时出错", e)
-        raise ex
+            future = executor.submit(readAndTranslateJson, file)
+            future_to_file[future] = file
         
-    # import concurrent.futures
-    # with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fileList), int(os.cpu_count()//2 + 0.5))) as executor:
-    #     # 创建任务字典，用于跟踪任务
-    #     future_to_file = {}
-        
-    #     # 提交所有任务到线程池
-    #     try:
-    #         for file in jsonList:
-    #             future = executor.submit(readAndTranslateJson, file, api_key, base_url, model, hint, onlyChs)
-    #             future_to_file[future] = file
-    #     except Exception as e:
-    #         print("出错")
-    #         raise
-        
-    #     # 处理任务结果
-    #     for future in concurrent.futures.as_completed(future_to_file):
-    #         file = future_to_file[future]
-    #         try:
-    #             future.result()  # 获取结果，如果有异常会抛出
-    #             logging.info(f"成功处理文件: {file}")
-    #         except Exception as e:
-    #             logging.error(f"处理文件 {file} 时出错: {e}")
-    #             raise
+        # 处理任务结果
+        for future in concurrent.futures.as_completed(future_to_file):
+            file = future_to_file[future]
+            try:
+                future.result()  # 获取结果，如果有异常会抛出
+                logging.info(f"成功处理文件: {file}")
+            except Exception as e:
+                logging.error(f"处理文件 {file} 时出错: {e}")
                 
     for file in fileList:
         intract.dictionary_intract(file + ".json")
         print("翻译完成，正在合并文件:" + file)
-        if removeJson:
-            os.remove(file + ".json")
-            print("删除文件:" + file + ".json")
         
     print("翻译完成!!!!!")
     
-    return True
