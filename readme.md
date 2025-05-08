@@ -6,8 +6,14 @@
 
 2、使用的模型支持openai库框架下api调用。
 
-# 生成EXE说明
+# 生成命令行EXE说明
     python -m venv venv
     .\venv\Scripts\Activate.ps1
     pip install -r requirements.txt
-    pyinstaller -F transyytg_con.py -i OIP-C.jpg
+    pyinstaller -F transyytg_con_cl.py -i OIP-C.jpg
+
+# 生成图形
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
+    pyinstaller -F  --windowed transyytg_con_window.py -i OIP-C.jpg
