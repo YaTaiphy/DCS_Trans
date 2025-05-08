@@ -175,6 +175,7 @@ def readAndTranslateJson(jsonPath):
             else:
                 # 如果没有翻译过，则调用翻译函数
                 translatedText = dptrans(text=value, api_key=api_key, base_url=base_url, model=model, hint=hint)
+                print("翻译后的文本：\n"+translatedText)
                 # 将翻译后的文本加入到translatedJson中，由于使用了concurrent.futures并发执行，因此需要加锁
                 # translatedJson[value] = translatedText
                 # 这里使用了一个简单的锁机制，实际使用中可以使用更复杂的锁机制 

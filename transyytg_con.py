@@ -1,4 +1,5 @@
 ## python 创建虚拟环境
+import logging
 import os
 import argparse
 import json
@@ -59,6 +60,7 @@ def get_jsonList(mizPath):
     return jsonList
 
 def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
+    print("处理文件——" + jsonPath)
     count = 0
     # 读取json文件
     with open(jsonPath, "r", encoding="utf-8") as f:
@@ -70,14 +72,16 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
         count += 1
         # 打印翻译进度
         if count % 10 == 0:
-            print(f"翻译进度：{count}/{len(jsonData)} of {jsonPath}")
+            logging.info(f"翻译进度：{count}/{len(jsonData)} of {jsonPath}")
+            # print(f"翻译进度：{count}/{len(jsonData)} of {jsonPath}")
         if "Name" in key:
             continue  # 跳过Name字段
         if "DictKey" in value:
             continue
         if isMatchLua(value):
             # 如果value是lua函数，则跳过翻译
-            print("value是lua函数跳过翻译：\n"+ value)
+            # print("value是lua函数跳过翻译：\n"+ value)
+            logging.info(f"跳过翻译：{value}")
             translatedJson[value] = ""
             continue
         if len(value) < 2:
@@ -88,11 +92,13 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
             if check_translation_exists(value) and translatedJson[value] != "":
                 # 如果已经翻译过，则直接使用翻译后的文本
                 translatedText = translatedJson[value]
-                print("如果已经翻译过，则直接使用翻译后的文本：\n"+value + "\n" + translatedText)
+                # print("如果已经翻译过，则直接使用翻译后的文本：\n"+value + "\n" + translatedText)
+                logging.info(f"已翻译：{value} -> {translatedText}")
             else:
                 try:
                 # 如果没有翻译过，则调用翻译函数
                     translatedText = dptrans(text=value, api_key=api_key, base_url=base_url, model=model, hint=hint)
+                    logging.info(f"翻译：{value} -> {translatedText}")
                 except Exception as e:
                     print("翻译API调用出错")
                     ex = Exception("翻译API调用出错", e)
@@ -122,6 +128,7 @@ def readAndTranslateJson(jsonPath, api_key, base_url, model, hint, onlyChs):
     #     json.dump(jsonData, f, ensure_ascii=False, indent=4)  # indent=4表示缩进4个空格
     with open(jsonPath, "w", encoding="utf-8") as f:
         json.dump(jsonData, f, ensure_ascii=False, indent=4)  # indent=4表示缩进4个空格
+    print("文件翻译完成——" + jsonPath)
     
 def transyytg_con(api_key, base_url, model, hint, removeJson, mizPath, onlyChs):
 
@@ -153,42 +160,43 @@ def transyytg_con(api_key, base_url, model, hint, removeJson, mizPath, onlyChs):
     jsonList = get_jsonList(jsonsPath)
     jsonList.sort()
     print(jsonList)  # 打印文件列表
-    try:
-        for file in jsonList:
-            print("处理文件")
-            readAndTranslateJson(file, api_key, base_url, model, hint, onlyChs)
-    except Exception as e:
-        print("处理文件时出错")
-        ex = Exception("处理文件时出错", e)
-        raise ex
+    # try:
+    #     for file in jsonList:
+    #         print("处理文件")
+    #         readAndTranslateJson(file, api_key, base_url, model, hint, onlyChs)
+    # except Exception as e:
+    #     print("处理文件时出错")
+    #     ex = Exception("处理文件时出错", e)
+    #     raise ex
         
-    # import concurrent.futures
-    # with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fileList), int(os.cpu_count()//2 + 0.5))) as executor:
-    #     # 创建任务字典，用于跟踪任务
-    #     future_to_file = {}
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(fileList), int(os.cpu_count()//2 + 0.5))) as executor:
+        # 创建任务字典，用于跟踪任务
+        future_to_file = {}
         
-    #     # 提交所有任务到线程池
-    #     try:
-    #         for file in jsonList:
-    #             future = executor.submit(readAndTranslateJson, file, api_key, base_url, model, hint, onlyChs)
-    #             future_to_file[future] = file
-    #     except Exception as e:
-    #         print("出错")
-    #         raise
+        # 提交所有任务到线程池
+        try:
+            for file in jsonList:
+                future = executor.submit(readAndTranslateJson, file, api_key, base_url, model, hint, onlyChs)
+                future_to_file[future] = file
+        except Exception as e:
+            print("出错")
+            ex = Exception("提交任务时出错", e)
+            raise ex
         
-    #     # 处理任务结果
-    #     for future in concurrent.futures.as_completed(future_to_file):
-    #         file = future_to_file[future]
-    #         try:
-    #             future.result()  # 获取结果，如果有异常会抛出
-    #             logging.info(f"成功处理文件: {file}")
-    #         except Exception as e:
-    #             logging.error(f"处理文件 {file} 时出错: {e}")
-    #             raise
+        # 处理任务结果
+        for future in concurrent.futures.as_completed(future_to_file):
+            file = future_to_file[future]
+            try:
+                future.result()  # 获取结果，如果有异常会抛出
+                logging.info(f"成功处理文件: {file}")
+            except Exception as e:
+                logging.error(f"处理文件 {file} 时出错: {e}")
+                raise e
                 
     for file in fileList:
         intract.dictionary_intract(file + ".json")
-        print("翻译完成，正在合并文件:" + file)
+        print("正在合并文件:" + file)
         if removeJson:
             os.remove(file + ".json")
             print("删除文件:" + file + ".json")

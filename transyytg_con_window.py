@@ -183,6 +183,7 @@ class Application:
         
         # 添加运行按钮
         run_btn = tk.Button(buttons_frame, text="运行", command=self.run_process)
+        run_btn.config(state=tk.DISABLED)  # 初始禁用
         run_btn.pack(side=tk.LEFT, expand=True, padx=5)
         self.control_buttons.append(run_btn)
         self.run_button = run_btn
@@ -204,13 +205,13 @@ class Application:
             self.right_frame, wrap=tk.WORD, width=40, height=20, state=tk.DISABLED)
         self.output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        def on_scroll(event):
-            if hasattr(sys.stdout, 'auto_scroll'):
-                sys.stdout.auto_scroll = (self.output_text.yview()[1] == 1.0)
+        # def on_scroll(event):
+        #     if hasattr(sys.stdout, 'auto_scroll'):
+        #         sys.stdout.auto_scroll = (self.output_text.yview()[1] == 1.0)
         
-        self.output_text.bind("<MouseWheel>", on_scroll)
-        self.output_text.bind("<Button-4>", on_scroll)
-        self.output_text.bind("<Button-5>", on_scroll)
+        # self.output_text.bind("<MouseWheel>", on_scroll)
+        # self.output_text.bind("<Button-4>", on_scroll)
+        # self.output_text.bind("<Button-5>", on_scroll)
         
         clear_btn = tk.Button(self.right_frame, text="清空输出", command=self.clear_output)
         clear_btn.pack(pady=(0, 5))
@@ -300,6 +301,7 @@ class Application:
         for i, value in enumerate(values, 1):
             print(f"输入{i}: {value}")
         print("-" * 30)
+        self.toggle_buttons_state(tk.NORMAL)
 
     def reset_fields(self):
         defaults = [

@@ -35,7 +35,6 @@ def dptrans(text, api_key, base_url="https://api.deepseek.com", model = "deepsee
         stream=False
     )
 
-    print(response.choices[0].message.content)
     return response.choices[0].message.content
     
 if __name__ == "__main__":
