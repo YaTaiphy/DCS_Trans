@@ -4,8 +4,8 @@
 /cache
 /dist
 /test
-/.venv
+/venv
 *.pyc
-*.txt
 *.spec
-*.json
+response.json
+system_prompt.txt
