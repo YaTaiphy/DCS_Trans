@@ -1,0 +1,11 @@
+/__pycache__
+/.idea
+/build
+/cache
+/dist
+/test
+/.venv
+*.pyc
+*.txt
+*.spec
+*.json
