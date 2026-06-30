@@ -17,3 +17,5 @@
     .\venv\Scripts\Activate.ps1
     pip install -r requirements.txt
     pyinstaller -F  --windowed transyytg_con_window.py -i OIP-C.jpg
+
+nuitka --standalone --onefile  --enable-plugin=upx --upx-binary="F:\AWCSMARK\upx-5.1.1-win64\upx.exe"  --windows-icon-from-ico=./favicon.ico  --lto=yes --output-filename="transyytg_con_cl v2.0.py" transyytg_con_cl.py.py
