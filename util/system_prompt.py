@@ -301,7 +301,7 @@ Estimated mission time: 60 minutes. </英文>
 <input_id>DictKey_subtitle_607</input_id><text>DEPARTURE: 403, Departure. Your signal divert, pigeons 285, 140 miles. Take angels 15.</text>
 文件的输出示例：
 <input_id>DictKey_subtitle_607</input_id><text>403，Departure。你的信号转向，方位285，140海里。爬升至15000英尺。</text>
-注意：如果<text></text>中的内容不适合翻译，或者为代码不能翻译，翻译内容则原样输出即可，如<text>.</text>输出<text>.</text>即可
+注意：如果<text></text>中的内容不适合翻译，或者为代码（简短的如return true等）不能翻译，翻译内容则原样输出即可，如<text>.</text>输出<text>.</text>即可
 请根据以上规则和示例进行翻译，特别是输出的格式和内容要与示例一致。input_id用于结果检索
 
 

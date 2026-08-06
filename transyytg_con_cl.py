@@ -61,6 +61,10 @@ def readAndTranslateJson(jsonPath, api_key, onlyChs):
             logging.info("value是lua函数跳过翻译：\n" + value)
             print("value是lua函数跳过翻译：\n" + value)
             continue
+        if "return true" in value or "destroy()" in value or "trigger.action" in value or "return false" in value or "return nil" in value or "return 0" in value:
+            logging.info("value是lua函数跳过翻译：\n" + value)
+            print("value是lua函数跳过翻译：\n" + value)
+            continue
         if len(value) < 2:
             continue
         jsonDataFiltered[key] = value
