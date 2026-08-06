@@ -1,61 +1,93 @@
+#!/usr/bin/env python3
+"""
+Translation Fix Tool
+
+After manually editing _translateRef.json files to correct translations,
+run this tool to merge the corrections into the consolidated cache.
+
+The consolidated cache (./cache/translated.json) can be used as a reference
+for future translation runs to avoid repeating the same mistakes.
+
+Usage:
+    python fix_translate.py /path/to/missions
+"""
+
 import os
+import sys
 import json
 
-### 读取文件夹下所有以_translateRef.json结尾的文件
-def get_translateRef_jsonList(folderPath):
-    # 获取当前路径下的json文件
-    jsonList = []
-    for root, dirs, files in os.walk(folderPath):
+
+def find_translate_ref_files(folder_path):
+    """Find all _translateRef.json files in the given directory tree."""
+    ref_files = []
+    for root, dirs, files in os.walk(folder_path):
         for file in files:
             if file.endswith("_translateRef.json"):
-                jsonList.append(os.path.join(root, file))
-    return jsonList
+                ref_files.append(os.path.join(root, file))
+    return ref_files
 
-### 寻找.cache/translated.json文件，如果没有则创建一个空的，如果有则读取，将translated.json中同key的value替换为_translateRef.json中的value
-def merge_translations(jsonList):
-    # 读取或创建translated.json
-    translated_path = "./cache/translated.json"
-    if os.path.exists(translated_path):
-        with open(translated_path, "r", encoding="utf-8") as f:
-            translatedJson = json.load(f)
+
+def merge_translations(ref_files, output_path="./cache/translated.json"):
+    """
+    Merge all translation reference files into a consolidated cache.
+    For conflicting keys, the value from the reference file takes precedence.
+    """
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Load existing consolidated cache
+    if os.path.exists(output_path):
+        with open(output_path, "r", encoding="utf-8") as f:
+            consolidated = json.load(f)
     else:
-        translatedJson = {}
-        with open(translated_path, "w", encoding="utf-8") as f:
-            json.dump(translatedJson, f, ensure_ascii=False, indent=4)
-        with open(translated_path, "r", encoding="utf-8") as f:
-            translatedJson = json.load(f)
+        consolidated = {}
 
-    ## 创建key改编状态
-    key_status = []
-    # 遍历所有_translateRef.json文件，合并翻译
-    for jsonFile in jsonList:
-        with open(jsonFile, "r", encoding="utf-8") as f:
-            currentJson = json.load(f)
-            for key, value in currentJson.items():
-                if key in translatedJson and value != translatedJson[key] and key not in key_status:
-                    translatedJson[key] = value  # 替换为_translateRef.json中的value
-                    key_status.append(key)  # 记录已改编的key，避免重复替换
-                elif key not in translatedJson:
-                    translatedJson[key] = value  # 新增未存在的key
+    # Track which keys have been updated in this run
+    updated_keys = set()
 
-    # 保存合并后的结果
-    with open(translated_path, "w", encoding="utf-8") as f:
-        json.dump(translatedJson, f, ensure_ascii=False, indent=4)
-    print(f"合并完成，已保存到 {translated_path}")
+    # Merge each reference file
+    for ref_file in ref_files:
+        with open(ref_file, "r", encoding="utf-8") as f:
+            current = json.load(f)
+            for key, value in current.items():
+                if key in consolidated and value != consolidated[key] and key not in updated_keys:
+                    consolidated[key] = value
+                    updated_keys.add(key)
+                elif key not in consolidated:
+                    consolidated[key] = value
 
-def fix_translate(folderPath):
-    jsonList = get_translateRef_jsonList(folderPath)
-    print("找到以下_translateRef.json文件：")
-    for jsonFile in jsonList:
-        print(jsonFile)
-    merge_translations(jsonList)
-    print("翻译修复完成！")
+    # Write back
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(consolidated, f, ensure_ascii=False, indent=4)
+
+    print(f"Merged {len(ref_files)} reference file(s) into {output_path}")
+    print(f"Total entries: {len(consolidated)}, Updated: {len(updated_keys)}")
+    return consolidated
+
+
+def fix_translate(folder_path):
+    """Main entry point for the fix-translate workflow."""
+    if not os.path.isdir(folder_path):
+        print(f"Error: Path does not exist or is not a directory: {folder_path}")
+        sys.exit(1)
+
+    ref_files = find_translate_ref_files(folder_path)
+    print(f"Found {len(ref_files)} _translateRef.json file(s):")
+    for f in ref_files:
+        print(f"  {f}")
+
+    if not ref_files:
+        print("No translation reference files found. Nothing to do.")
+        return
+
+    merge_translations(ref_files)
+    print("Translation fix complete!")
+
 
 if __name__ == "__main__":
-    folderPath = "G:\\E\\FROG-7"  # 任务路径
-    jsonList = get_translateRef_jsonList(folderPath)
-    print("找到以下_translateRef.json文件：")
-    for jsonFile in jsonList:
-        print(jsonFile)
-    merge_translations(jsonList)
+    if len(sys.argv) > 1:
+        folder_path = sys.argv[1]
+    else:
+        folder_path = input("Enter mission folder path: ").strip()
 
+    fix_translate(folder_path)

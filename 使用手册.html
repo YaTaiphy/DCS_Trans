@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DCS Mission Translator — 使用手册</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --warn: #d29922;
+    --danger: #f85149;
+    --success: #3fb950;
+    --code-bg: #1c2128;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: .5rem; margin-bottom: .5rem; }
+  h1 small { font-size: 1rem; color: var(--muted); font-weight: normal; }
+  h2 { font-size: 1.4rem; margin: 2.5rem 0 1rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; color: var(--accent); }
+  p, li { margin: .4rem 0; }
+  ul, ol { padding-left: 1.5rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: var(--code-bg); padding: .15em .4em; border-radius: 4px;
+    font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+    font-size: .9em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 1rem; overflow-x: auto; font-size: .85em; line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { border: 1px solid var(--border); padding: .5rem .75rem; text-align: left; }
+  th { background: var(--surface); font-weight: 600; }
+  tr:nth-child(even) { background: var(--surface); }
+  .note {
+    border-left: 3px solid var(--accent); background: rgba(88,166,255,.08);
+    padding: .6rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+  }
+  .warn {
+    border-left: 3px solid var(--warn); background: rgba(210,153,34,.08);
+    padding: .6rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+  }
+  .danger {
+    border-left: 3px solid var(--danger); background: rgba(248,81,73,.08);
+    padding: .6rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+  }
+  .tag {
+    display: inline-block; padding: .1em .5em; border-radius: 4px;
+    font-size: .8em; font-weight: 600;
+  }
+  .tag-new { background: var(--success); color: #000; }
+  .tag-cli { background: var(--accent); color: #000; }
+  .flow-step {
+    display: flex; align-items: flex-start; gap: .8rem; margin: .6rem 0;
+    padding: .5rem .8rem; background: var(--surface); border-radius: 6px;
+  }
+  .flow-num {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: #000; display: flex;
+    align-items: center; justify-content: center; font-weight: 700; font-size: .85em;
+  }
+  .flow-content { flex: 1; }
+  .flow-content strong { display: block; }
+  .flow-content span { font-size: .85em; color: var(--muted); }
+  #toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; margin: 1.5rem 0; }
+  #toc ol { padding-left: 1.2rem; }
+  #toc li { margin: .2rem 0; }
+  @media (max-width: 600px) {
+    body { padding: 1rem; }
+    pre { font-size: .75em; }
+  }
+</style>
+</head>
+<body>
+
+<h1>DCS Mission Translator <small>v2.2</small></h1>
+<p>将 DCS World 数字战斗模拟的 <code>.miz</code> 任务文件从英文翻译为简体中文，使用 DeepSeek v4 Pro 大模型 API。</p>
+
+<div id="toc">
+<strong>目录</strong>
+<ol>
+  <li><a href="#quickstart">快速开始</a></li>
+  <li><a href="#install">安装</a></li>
+  <li><a href="#usage">使用方法</a>
+    <ol>
+      <li><a href="#cli-mode">命令行模式</a></li>
+      <li><a href="#interactive-mode">交互模式</a></li>
+      <li><a href="#rollback">翻译回滚</a></li>
+      <li><a href="#fix">修正翻译</a></li>
+    </ol>
+  </li>
+  <li><a href="#output">输出格式说明</a></li>
+  <li><a href="#flow">处理链路详解</a></li>
+  <li><a href="#cache">缓存系统</a></li>
+  <li><a href="#glossary">军事术语处理</a></li>
+  <li><a href="#config">配置与持久化</a></li>
+  <li><a href="#build">构建独立 EXE</a></li>
+  <li><a href="#trouble">故障排除</a></li>
+</ol>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="quickstart">1. 快速开始</h2>
+
+<pre><code># 安装依赖
+pip install openai requests
+
+# 翻译一个任务文件夹
+python transyytg_con_cl.py --api-key sk-your-key --path "E:\DCS\Missions"
+
+# 或者交互模式（推荐首次使用）
+python transyytg_con_cl.py
+</code></pre>
+
+<div class="note">
+<strong>前提</strong>：需要一个 <a href="https://platform.deepseek.com/" target="_blank">DeepSeek API Key</a>（注册即送额度），以及 DCS World 的 <code>.miz</code> 任务文件。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="install">2. 安装</h2>
+
+<h3>2.1 获取代码</h3>
+<pre><code>git clone https://github.com/YaTaiphy/DCS_Trans.git
+cd DCS_Trans</code></pre>
+
+<h3>2.2 创建虚拟环境（推荐）</h3>
+<pre><code>python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# Windows CMD / Git Bash
+source .venv/Scripts/activate</code></pre>
+
+<h3>2.3 安装依赖</h3>
+<pre><code>pip install -r requirements.txt</code></pre>
+
+<p><code>requirements.txt</code> 仅含两个直接依赖：<code>openai</code> 和 <code>requests</code>，pip 会自动安装其传递依赖。</p>
+
+<!-- ================================================================== -->
+<h2 id="usage">3. 使用方法</h2>
+
+<h3 id="cli-mode">3.1 命令行模式</h3>
+
+<table>
+<tr><th>参数</th><th>说明</th><th>示例</th></tr>
+<tr><td><code>--api-key</code></td><td>DeepSeek API Key</td><td><code>--api-key sk-xxxx</code></td></tr>
+<tr><td><code>--path</code></td><td>包含 .miz 文件的文件夹路径</td><td><code>--path "E:/DCS/Missions"</code></td></tr>
+<tr><td><code>--only-chs</code></td><td>仅输出中文（默认中英混排）</td><td><code>--only-chs</code></td></tr>
+<tr><td><code>--remove-json</code></td><td>翻译完成后删除中间 JSON 文件</td><td><code>--remove-json</code></td></tr>
+<tr><td><code>--no-remote</code></td><td>禁用远程社区缓存服务器</td><td><code>--no-remote</code></td></tr>
+<tr><td><code>--rollback</code></td><td>回滚翻译，恢复原始英文<span class="tag tag-new">v2.2</span></td><td><code>--rollback</code></td></tr>
+</table>
+
+<pre><code># 基础翻译
+python transyytg_con_cl.py --api-key sk-xxxx --path "E:/DCS/Missions"
+
+# 仅中文 + 离线模式 + 清理中间文件
+python transyytg_con_cl.py --api-key sk-xxxx --path ./missions --only-chs --no-remote --remove-json</code></pre>
+
+<h3 id="interactive-mode">3.2 交互模式</h3>
+
+<p>不带任何参数运行，按提示逐步输入。首次运行后，每次都会显示上次保存的默认值，直接回车即可沿用。</p>
+
+<pre><code>python transyytg_con_cl.py</code></pre>
+
+<pre><code>============================================================
+DCS Mission Translator v2.2
+当前模型: deepseek-v4-pro (固定)
+远程缓存: 已启用
+============================================================
+请输入API Key [默认: ********cdef]:        <em>← 回车使用已保存的 Key</em>
+请输入任务文件夹路径 [默认: E:/DCS/Missions]: <em>← 回车使用上次路径</em>
+找到 3 个.miz文件
+是否中英文混排？(y/n, 默认=混排):          <em>← 回车保持默认</em>
+是否删除中间JSON文件？(y/n, 默认=否):
+是否使用远程缓存服务器？(y/n, 默认=启用):
+</code></pre>
+
+<h3 id="rollback">3.3 翻译回滚 <span class="tag tag-new">v2.2</span></h3>
+
+<p>如果对翻译效果不满意，可以一键恢复原始英文任务：</p>
+
+<pre><code>python transyytg_con_cl.py --rollback --path "E:/DCS/Missions"</code></pre>
+
+<p>回滚操作会：</p>
+<ol>
+  <li>从每个 <code>.miz</code> 归档中删除 <code>l10n/CN/dictionary</code> 条目</li>
+  <li>清理翻译过程中生成的中间文件（<code>*.miz.json</code> 和 <code>*_translateRef.json</code>）</li>
+  <li>原始 <code>l10n/DEFAULT/dictionary</code> 不受影响</li>
+</ol>
+
+<div class="warn">
+<strong>注意</strong>：回滚仅移除中文翻译层。DCS 游戏语言设为英文时也不会加载 CN 字典，所以不执行回滚也不影响英文体验。
+</div>
+
+<h3 id="fix">3.4 修正翻译</h3>
+
+<p>翻译完成后，每个 <code>.miz</code> 同目录下会生成 <code>*_translateRef.json</code> 文件（英文→中文对照表）。可以手动编辑纠正错误的翻译，然后运行合并命令：</p>
+
+<pre><code>python fix_translate.py /path/to/missions</code></pre>
+
+<p>这会将所有修正后的翻译合并到 <code>./cache/translated.json</code> 词典中供参考。</p>
+
+<!-- ================================================================== -->
+<h2 id="output">4. 输出格式说明</h2>
+
+<p>翻译结果按 DCS 字典字段类型应用不同的格式规则：</p>
+
+<table>
+<tr><th>字段类型</th><th>中英混排（默认）</th><th>仅中文（<code>--only-chs</code>）</th></tr>
+<tr>
+  <td>普通文本</td>
+  <td><code>原文<br>译文</code></td>
+  <td><code>译文</code></td>
+</tr>
+<tr>
+  <td>Radio 字段<br><small>（键名含 "Radio"）</small></td>
+  <td><code>[原文][译文]</code></td>
+  <td><code>译文</code></td>
+</tr>
+<tr>
+  <td>Script 字段<br><small>（键名含 "Script"）</small></td>
+  <td><code>原文[译文]</code></td>
+  <td><code>[Script]译文</code></td>
+</tr>
+</table>
+
+<div class="note">
+<strong>为什么不同字段有不同格式？</strong> 这是 DCS 引擎的解析约定。<code>[ ]</code> 括号在 DCS 的字典系统中用于分隔原文和译文，Radio 和 Script 字段有特殊的显示逻辑。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="flow">5. 处理链路详解</h2>
+
+<div class="flow-step">
+  <div class="flow-num">1</div>
+  <div class="flow-content">
+    <strong>提取字典</strong>
+    <span>从 .miz (ZIP) 中提取 l10n/DEFAULT/dictionary，Lua 表 → JSON</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">2</div>
+  <div class="flow-content">
+    <strong>过滤不可翻译内容</strong>
+    <span>跳过 Name 字段、DictKey 引用、Lua 代码、长度 &lt;2 的字符串</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">3</div>
+  <div class="flow-content">
+    <strong>内容哈希</strong>
+    <span>MD5 计算 → "md5_{32位hex}" 作为缓存键</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">4</div>
+  <div class="flow-content">
+    <strong>缓存查找</strong>
+    <span>本地缓存(瞬时) → 远程缓存(补充) → 未命中则 LLM 翻译</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">5</div>
+  <div class="flow-content">
+    <strong>动态术语注入</strong>
+    <span>扫描原文，从 97 条术语库中匹配相关条目，注入提示词</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">6</div>
+  <div class="flow-content">
+    <strong>LLM 翻译</strong>
+    <span>DeepSeek v4 Pro，reasoning_effort=high，thinking enabled</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">7</div>
+  <div class="flow-content">
+    <strong>解析输出</strong>
+    <span>正则提取 &lt;input_id&gt; 标签，校验数量，空结果报错退出</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">8</div>
+  <div class="flow-content">
+    <strong>术语后处理校正</strong>
+    <span>Pass 1: keep 术语被误翻译的还原 | Pass 2: brevity 漏翻的补译</span>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">9</div>
+  <div class="flow-content">
+    <strong>应用翻译 + 回写</strong>
+    <span>按字段类型混排，写 _translateRef.json，JSON→Lua 写回 .miz</span>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="cache">6. 缓存系统</h2>
+
+<h3>6.1 缓存优先级</h3>
+
+<pre><code>本地缓存 (毫秒级) ──miss──▶ 远程缓存 (秒级) ──miss──▶ LLM 翻译 (API)</code></pre>
+
+<p>本地优先的设计确保已有翻译零网络延迟返回，远程仅作为社区补充。</p>
+
+<h3>6.2 本地缓存文件</h3>
+
+<table>
+<tr><th>文件</th><th>内容</th><th>格式</th></tr>
+<tr><td><code>md5_{hash}_translated.json</code></td><td>解析后的翻译字典</td><td>JSON dict</td></tr>
+<tr><td><code>md5_{hash}_raw.txt</code></td><td>LLM 原始响应</td><td>纯文本（调试用）</td></tr>
+<tr><td><code>config.json</code></td><td>持久化配置</td><td>JSON</td></tr>
+<tr><td><code>log.txt</code></td><td>运行日志</td><td>文本</td></tr>
+</table>
+
+<h3>6.3 远程社区缓存</h3>
+
+<p>翻译结果可上传至社区服务器供他人复用。同样，你也能受益于他人的翻译结果——即使没有自己的 API Key 也能使用（前提是内容已被他人翻译过）。</p>
+
+<div class="note">
+<strong>隐私提示</strong>：远程缓存上传的内容是翻译字典（DictKey → 中文），不含任务文件的其他信息。如介意，使用 <code>--no-remote</code> 完全禁用。
+</div>
+
+<h3>6.4 缓存命名迁移</h3>
+
+<p>旧版缓存文件以裸 MD5 哈希命名（如 <code>a1b2c3_translated.json</code>），无法区分哈希算法。v2.1 起使用 <code>md5_</code> 前缀（如 <code>md5_a1b2c3_translated.json</code>）。旧格式文件在首次访问时自动重命名为新格式，无需手动迁移。</p>
+
+<!-- ================================================================== -->
+<h2 id="glossary">7. 军事术语处理</h2>
+
+<p>程序采用三层防御确保军事术语翻译正确：</p>
+
+<table>
+<tr><th>层级</th><th>时机</th><th>机制</th></tr>
+<tr>
+  <td><strong>静态提示词</strong></td>
+  <td>每次 LLM 调用</td>
+  <td>核心规则 + 16 对翻译示例，定义基础翻译策略</td>
+</tr>
+<tr>
+  <td><strong>动态术语注入</strong></td>
+  <td>LLM 调用前</td>
+  <td>扫描当前待翻译文本，从 97 条术语库中匹配，仅注入相关条目到提示词</td>
+</tr>
+<tr>
+  <td><strong>后处理校正</strong></td>
+  <td>LLM 调用后</td>
+  <td>自动修正：keep 术语被误翻译的还原为英文，brevity 漏翻的补译为中文</td>
+</tr>
+</table>
+
+<p>术语库位于 <code>util/military_glossary.json</code>，包含 6 个类别共 97 条：</p>
+
+<table>
+<tr><th>类别</th><th>条目数</th><th>策略</th></tr>
+<tr><td>mission_types（任务类型）</td><td>10</td><td>保留原文</td></tr>
+<tr><td>roles_and_platforms（角色/平台）</td><td>9</td><td>保留原文</td></tr>
+<tr><td>threat_systems（威胁/武器系统）</td><td>11</td><td>保留原文</td></tr>
+<tr><td>brevity_translate（战斗用语）</td><td>49</td><td>必须翻译</td></tr>
+<tr><td>navigation_and_ops（导航/作战）</td><td>11</td><td>保留原文</td></tr>
+<tr><td>weapon_codes（武器码）</td><td>10</td><td>保留原文</td></tr>
+</table>
+
+<div class="note">
+<strong>扩展术语库</strong>：编辑 <code>util/military_glossary.json</code> 即可添加新术语，下次运行自动生效。欢迎向社区贡献新条目。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="config">8. 配置与持久化 <span class="tag tag-new">v2.2</span></h2>
+
+<p>程序自动在 <code>./cache/config.json</code> 保存以下选项：</p>
+
+<pre><code>{
+  "api_key": "sk-xxxx",
+  "path": "E:/DCS/Missions",
+  "only_chs": false,
+  "remove_json": false,
+  "use_remote_cache": true
+}</code></pre>
+
+<ul>
+  <li><strong>命令行模式</strong>：<code>--api-key</code> 和 <code>--path</code> 的值在翻译完成后自动保存</li>
+  <li><strong>交互模式</strong>：每次确认后保存所有选项，下次按回车即可沿用</li>
+  <li><strong>API Key 安全</strong>：存储在本地 <code>cache/</code> 目录（已 gitignore），显示时遮罩为 <code>********cdef</code></li>
+</ul>
+
+<div class="warn">
+<strong>安全提醒</strong>：API Key 以明文存储在 <code>./cache/config.json</code>。请勿将此文件分享给他人或提交到 Git 仓库。该目录已在 <code>.gitignore</code> 中排除。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="build">9. 构建独立 EXE</h2>
+
+<pre><code>pip install pyinstaller
+pyinstaller -F transyytg_con_cl.py -i favicon.ico</code></pre>
+
+<p>生成的 <code>transyytg_con_cl.exe</code> 在 <code>./dist/</code> 目录下，可独立运行（无需安装 Python）。</p>
+
+<p>如需包含自定义图标，将 <code>.ico</code> 文件放在项目根目录。</p>
+
+<!-- ================================================================== -->
+<h2 id="trouble">10. 故障排除</h2>
+
+<table>
+<tr><th>问题</th><th>可能原因</th><th>解决方案</th></tr>
+<tr>
+  <td>找不到 .miz 文件</td>
+  <td>路径不正确或 .miz 不在目录根层</td>
+  <td>确认路径，.miz 文件需在指定目录的直接子级</td>
+</tr>
+<tr>
+  <td>翻译过程中报错</td>
+  <td>API Key 无效或余额不足</td>
+  <td>检查 <a href="https://platform.deepseek.com/" target="_blank">DeepSeek 控制台</a></td>
+</tr>
+<tr>
+  <td>LLM 返回无法解析</td>
+  <td>模型输出了非预期格式</td>
+  <td>查看 <code>./cache/*_parse_error.txt</code> 排查原始输出</td>
+</tr>
+<tr>
+  <td>部分条目未翻译</td>
+  <td>条目被过滤（Lua代码、过短文本）</td>
+  <td>正常现象，这些条目本就不应翻译</td>
+</tr>
+<tr>
+  <td>远程服务器不可用</td>
+  <td>服务器维护或网络问题</td>
+  <td>自动回退本地+LLM，不影响使用；也可 <code>--no-remote</code></td>
+</tr>
+<tr>
+  <td>翻译质量不佳</td>
+  <td>模型对特定术语处理不当</td>
+  <td>编辑 <code>_translateRef.json</code> 修正，运行 <code>fix_translate.py</code></td>
+</tr>
+<tr>
+  <td>想恢复英文原版</td>
+  <td>—</td>
+  <td><code>--rollback --path "..."</code></td>
+</tr>
+<tr>
+  <td>交互模式每次都重新输入</td>
+  <td>配置文件未生成</td>
+  <td>完成一次完整翻译流程后自动保存，下次即可使用默认值</td>
+</tr>
+</table>
+
+<hr style="margin: 3rem 0 1rem; border-color: var(--border);">
+
+<p style="text-align:center; color: var(--muted); font-size: .85em;">
+  DCS Mission Translator v2.2 &mdash; YATEIFEI &mdash;
+  <a href="https://github.com/YaTaiphy/DCS_Trans">GitHub</a> &mdash;
+  联系: l476579487@126.com &mdash; QQ群: 1033517336
+</p>
+
+</body>
+</html>

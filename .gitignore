@@ -172,3 +172,6 @@ cython_debug/
 
 *.exe
 transyytg_con_cl.*/
+
+# API keys / secrets
+config.json

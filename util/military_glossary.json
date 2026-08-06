@@ -1,0 +1,123 @@
+{
+  "_description": "DCS军事航空术语表 — 用于翻译策略参考和未来动态注入。提示词中已包含高频术语，此文件为完整参考。",
+  "_policy": {
+    "keep": "保留原文不翻译（缩写、代号、系统型号）",
+    "translate": "翻译为中文（俚语、brevity code）",
+    "context": "根据上下文决定"
+  },
+
+  "mission_types": {
+    "SEAD":      { "policy": "keep", "zh": "防空压制", "note": "Suppression of Enemy Air Defenses" },
+    "CAS":       { "policy": "keep", "zh": "近距离空中支援", "note": "Close Air Support" },
+    "CAP":       { "policy": "keep", "zh": "战斗空中巡逻", "note": "Combat Air Patrol" },
+    "TARCAP":    { "policy": "keep", "zh": "目标区战斗空中巡逻", "note": "Target Area Combat Air Patrol" },
+    "BVR":       { "policy": "keep", "zh": "超视距", "note": "Beyond Visual Range" },
+    "WVR":       { "policy": "keep", "zh": "视距内", "note": "Within Visual Range" },
+    "BFM":       { "policy": "keep", "zh": "基本战斗机机动", "note": "Basic Fighter Maneuvers" },
+    "Intercept": { "policy": "translate", "zh": "拦截" },
+    "Escort":    { "policy": "translate", "zh": "护航" },
+    "Strike":    { "policy": "keep", "zh": "打击", "note": "保留作为呼号，作为任务类型时翻译" },
+    "Fighter Sweep": { "policy": "keep", "zh": "战斗机扫荡" }
+  },
+
+  "roles_and_platforms": {
+    "AWACS":  { "policy": "keep", "zh": "空中预警与控制系统" },
+    "JTAC":   { "policy": "keep", "zh": "联合终端攻击控制员" },
+    "FAC":    { "policy": "keep", "zh": "前进空中管制员" },
+    "FAC(A)": { "policy": "keep", "zh": "机载前进空中管制员" },
+    "SOF":    { "policy": "keep", "zh": "特种作战部队" },
+    "C2":     { "policy": "keep", "zh": "指挥与控制" },
+    "LSO":    { "policy": "keep", "zh": "着舰信号官", "note": "Landing Signal Officer — 航母着舰引导" },
+    "RIO":    { "policy": "keep", "zh": "雷达拦截官", "note": "Radar Intercept Officer — 双座机后座" },
+    "WSO":    { "policy": "keep", "zh": "武器系统官", "note": "Weapon Systems Officer" }
+  },
+
+  "threat_systems": {
+    "SA-2":   { "policy": "keep", "zh": "萨姆-2", "nato": "Guideline" },
+    "SA-3":   { "policy": "keep", "zh": "萨姆-3", "nato": "Goa" },
+    "SA-6":   { "policy": "keep", "zh": "萨姆-6", "nato": "Gainful" },
+    "SA-8":   { "policy": "keep", "zh": "萨姆-8", "nato": "Gecko" },
+    "SA-10":  { "policy": "keep", "zh": "萨姆-10", "nato": "Grumble" },
+    "SA-11":  { "policy": "keep", "zh": "萨姆-11", "nato": "Gadfly" },
+    "SA-15":  { "policy": "keep", "zh": "萨姆-15", "nato": "Gauntlet" },
+    "SA-19":  { "policy": "keep", "zh": "萨姆-19", "nato": "Grison", "note": "通古斯卡 2K22M" },
+    "AAA":    { "policy": "keep", "zh": "高射炮", "note": "Anti-Aircraft Artillery" },
+    "MANPADS": { "policy": "keep", "zh": "肩射防空导弹" },
+    "ZSU-23-4": { "policy": "keep", "zh": "石勒喀自行高炮", "note": "Shilka" }
+  },
+
+  "brevity_translate": {
+    "angels":       { "zh": "高度", "unit": "千英尺", "example": "angels 7 → 高度7000英尺" },
+    "cherubs":      { "zh": "高度", "unit": "百英尺", "example": "cherubs 9 → 高度900英尺" },
+    "state":        { "zh": "油量", "example": "state 5.0 → 油量5.0" },
+    "hot":          { "zh": "迎头", "note": "目标朝你飞来" },
+    "cold":         { "zh": "尾追", "note": "目标远离你飞行" },
+    "flanking":     { "zh": "侧翼", "note": "目标横向飞行" },
+    "beaming":      { "zh": "横切", "note": "目标与雷达波束垂直飞行" },
+    "splash":       { "zh": "命中", "note": "空中目标被击毁" },
+    "shack":        { "zh": "命中", "note": "地面目标被击毁" },
+    "winchester":   { "zh": "弹药耗尽" },
+    "bingo":        { "zh": "最低油量", "note": "仅够返回基地的油量" },
+    "joker":        { "zh": "警戒油量", "note": "高于Bingo，应准备撤离" },
+    "tally":        { "zh": "目视发现", "note": "看到敌方目标" },
+    "visual":       { "zh": "目视", "note": "看到友方目标" },
+    "no joy":       { "zh": "未目视目标" },
+    "blind":        { "zh": "未看到友方" },
+    "spike":        { "zh": "雷达锁定", "note": "RWR — 机载雷达锁定告警" },
+    "mud":          { "zh": "地面雷达威胁", "note": "RWR — 地面雷达搜索/跟踪" },
+    "singer":       { "zh": "导弹发射告警", "note": "RWR — SAM发射告警" },
+    "naked":        { "zh": "雷达无威胁", "note": "RWR上无任何威胁信号" },
+    "buddy spike":  { "zh": "友机锁定", "note": "被友方雷达锁定" },
+    "knock it off": { "zh": "暂停" },
+    "bugout":       { "zh": "脱离战斗", "note": "脱离后不再返回" },
+    "extend":       { "zh": "拉开距离", "note": "短时脱离以获取能量/距离" },
+    "commit":       { "zh": "进入交战" },
+    "defensive":    { "zh": "防御机动", "note": "敌机在3-9线后方" },
+    "fence in":     { "zh": "战斗开关开", "note": "进入战区前的座舱开关设置" },
+    "fence out":    { "zh": "战斗开关关", "note": "离开战区后的座舱开关恢复" },
+    "cleared hot":  { "zh": "允许开火" },
+    "abort":        { "zh": "中止任务" },
+    "continue dry": { "zh": "继续但不投弹" },
+    "mark on top":  { "zh": "目标上空" },
+    "hard deck":    { "zh": "最低高度限制" },
+    "mother":       { "zh": "母舰" },
+    "mom":          { "zh": "母舰" },
+    "homeplate":    { "zh": "本方机场/母舰" },
+    "RTB":          { "zh": "返航", "note": "Return To Base" },
+    "divert":       { "zh": "备降", "note": "转场至备降机场" },
+    "feet wet":     { "zh": "海上", "note": "在水域上空" },
+    "feet dry":     { "zh": "陆上", "note": "在陆地上空" },
+    "bogey":        { "zh": "不明目标", "note": "未知身份目标" },
+    "bandit":       { "zh": "敌机", "note": "确认敌方目标" },
+    "skunk":        { "zh": "不明目标", "note": "海上不明目标" },
+    "popup":        { "zh": "突然出现", "note": "新出现的雷达目标" },
+    "leaker":       { "zh": "渗透目标", "note": "突破防线的敌机" },
+    "merged":       { "zh": "交汇", "note": "友机与敌机进入同一视距内" }
+  },
+
+  "navigation_and_ops": {
+    "IP":     { "policy": "keep", "zh": "起始点", "note": "Initial Point — 攻击起始点" },
+    "TOT":    { "policy": "keep", "zh": "目标时间", "note": "Time on Target" },
+    "TACAN":  { "policy": "keep", "zh": "塔康导航系统" },
+    "CASE I": { "policy": "keep", "zh": "CASE I 回收程序" },
+    "CASE II": { "policy": "keep", "zh": "CASE II 回收程序" },
+    "CASE III": { "policy": "keep", "zh": "CASE III 回收程序" },
+    "BRC":    { "policy": "keep", "zh": "基准回收航向", "note": "Base Recovery Course" },
+    "FEBA":   { "policy": "keep", "zh": "前线", "note": "Forward Edge of the Battle Area" },
+    "FLOT":   { "policy": "keep", "zh": "友军前锋线", "note": "Forward Line of Own Troops" },
+    "bullseye": { "policy": "keep", "zh": "公算点", "note": "通用坐标参考点" }
+  },
+
+  "weapon_codes": {
+    "Fox-1":  { "policy": "keep", "note": "半主动雷达弹 (AIM-7, R-27R)" },
+    "Fox-2":  { "policy": "keep", "note": "红外格斗弹 (AIM-9, R-73)" },
+    "Fox-3":  { "policy": "keep", "note": "主动雷达弹 (AIM-120, R-77)" },
+    "Rifle":  { "policy": "keep", "note": "空地导弹 (Maverick)" },
+    "Magnum": { "policy": "keep", "note": "反辐射导弹 (HARM, Kh-58)" },
+    "Bruiser": { "policy": "keep", "note": "空射反舰导弹" },
+    "Pig":    { "policy": "keep", "note": "滑翔制导武器" },
+    "Pickle": { "policy": "keep", "note": "投掷炸弹" },
+    "Maddog": { "policy": "keep", "note": "ARH弹无锁定发射" },
+    "Pitbull": { "policy": "keep", "note": "ARH弹转主动雷达制导" }
+  }
+}

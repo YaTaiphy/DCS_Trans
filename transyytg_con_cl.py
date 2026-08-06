@@ -1,325 +1,612 @@
-## python 创建虚拟环境
+#!/usr/bin/env python3
+"""
+DCS Mission Translator - CLI Entry Point
+
+Translates DCS World mission (.miz) files from English to Chinese using
+the DeepSeek LLM API. Extracts dictionary files from .miz archives,
+translates text content, and repackages them back.
+
+Usage:
+    python transyytg_con_cl.py --api-key YOUR_KEY --path /path/to/missions
+    python transyytg_con_cl.py  # Interactive mode
+"""
+
 import os
 import argparse
 import json
 import re
 import sys
 import logging
-
 import hashlib
 
-
-from util import system_prompt
-from util.LLM_trans import LLM_trans_v2, dptrans
+from util.system_prompt import system_prompt
+from util.LLM_trans import LLM_trans_v2
 from util.extract_miz import extract_specific_file, get_files
 from util.intract_miz import dictionary_intract
 from util.lua_reg import isMatchLua
-from util.remote_base16 import looking_translated, save_translated
-
-
-parser = argparse.ArgumentParser(description="一个命令行参数")
+from util.remote_cache import looking_translated, save_translated
+from util.glossary import correct_translations, build_dynamic_glossary_prompt
+from util.rollback import rollback_miz
+from util.config import load_config, save_config, mask_api_key
 
 CACHE_DIR = "./cache"
-## 创建./cache目录
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
 
-# 添加保存翻译结果的函数
-def save_translation_json(filename, content=None):
-    with open(os.path.join(CACHE_DIR, filename), "w", encoding="utf-8") as f:
-        json.dump(content, f, ensure_ascii=False, indent=4)
+# ---------------------------------------------------------------------------
+# Cache file naming
+# ---------------------------------------------------------------------------
+# New format:  md5_{hash}_translated.json  (with algorithm prefix)
+# Old format:  {hash}_translated.json      (legacy, no prefix)
+#
+# The lookup tries new format first, falls back to old, and auto-migrates
+# old files to new naming when found. This allows gradual migration while
+# retaining access to all previously cached translations.
+# ---------------------------------------------------------------------------
+
+CACHE_PREFIX = "md5_"
 
 
-def get_jsonList(mizPath):
-    # 获取当前路径下的json文件
-    jsonList = []
-    for root, dirs, files in os.walk(mizPath):
+def ensure_cache_dir():
+    """Create the cache directory if it doesn't exist."""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+
+def get_json_list(miz_path):
+    """Get all intermediate JSON files in the directory (excluding _translateRef)."""
+    json_list = []
+    for root, dirs, files in os.walk(miz_path):
         for file in files:
             if file.endswith(".json") and not file.endswith("_translateRef.json"):
-                jsonList.append(os.path.join(root, file))
-    return jsonList
+                json_list.append(os.path.join(root, file))
+    return json_list
 
 
-def readAndTranslateJson(jsonPath, api_key, onlyChs):
-    count = 0
-    # 读取json文件
-    with open(jsonPath, "r", encoding="utf-8") as f:
-        jsonData = f.read()
-    # 解析json文件
-    jsonData = json.loads(jsonData)
-
-    
-    # 对jsonData进行过滤，获得要翻译的jsonDataFiltered
-    jsonDataFiltered = {}
-    for key, value in jsonData.items():
+def filter_translatable(json_data):
+    """
+    Filter JSON data to only include translatable values.
+    Skips: Name fields, DictKey entries, Lua code, very short strings.
+    """
+    filtered = {}
+    for key, value in json_data.items():
         if "Name" in key:
-            continue  # 跳过Name字段
+            continue
         if "DictKey" in value:
             continue
         if isMatchLua(value):
-            # 如果value是lua函数，则跳过翻译
-            logging.info("value是lua函数跳过翻译：\n" + value)
-            print("value是lua函数跳过翻译：\n" + value)
+            logging.info("Skipping Lua code: %s", value[:80])
+            print(f"Skipping Lua code: {value[:80]}...")
             continue
         if len(value) < 2:
             continue
-        jsonDataFiltered[key] = value
-    # 对jsonDataFiltered进行排序
-    jsonDataFiltered = dict(sorted(jsonDataFiltered.items(), key=lambda item: item[0]))
-    # 对jsonDataFiltered的内容计算base16，作为标识，以便查找远程、本地是否已经翻译，且可用于本地存储
-    # 计算base16
-    jsonDataFilteredStr = json.dumps(jsonDataFiltered, ensure_ascii=False, indent=4)
-    jsonDataFilteredBase16 = hashlib.md5(jsonDataFilteredStr.encode("utf-8")).hexdigest()
-    
-    isRemote, remoteContent = looking_translated(jsonDataFilteredBase16)
-    if isRemote:
-        # 如果远程查找到了，则直接使用远程内容
-        translatedJson = remoteContent
-        isExistTranslatedJson = True
-    else:
-        # 如果远程没有查找到，则从本地缓存中查找
-        print(f"远程未查找到翻译结果，尝试从本地缓存中查找: {jsonDataFilteredBase16}")
-        translatedJsonPath = os.path.join(CACHE_DIR, f"{jsonDataFilteredBase16}_translated.json")
-        if os.path.exists(translatedJsonPath):
-            with open(translatedJsonPath, "r", encoding="utf-8") as f:
-                translatedJson = json.load(f)
-                isExistTranslatedJson = True
-            print(f"本地缓存中查找到翻译结果: {jsonDataFilteredBase16}")
-            print(f"尝试保存翻译结果到远程服务器: {jsonDataFilteredBase16}")
-            save_success, save_message = save_translated(jsonDataFilteredBase16, translatedJson )
-            if save_success:
-                print(f"翻译结果已成功保存到远程服务器: {jsonDataFilteredBase16}")
+        filtered[key] = value
+    return dict(sorted(filtered.items(), key=lambda item: item[0]))
+
+
+def compute_content_hash(data):
+    """
+    Compute MD5 content hash for cache identification.
+
+    Uses MD5 for its speed and compact 32-char hex output. While MD5 is
+    cryptographically broken for adversarial collision resistance, for
+    non-adversarial content-addressing of translation data the collision
+    probability is astronomically low (~1 in 2^64 birthday bound).
+
+    Returns:
+        Prefixed hash string, e.g. "md5_a1b2c3d4e5f6..."
+    """
+    data_str = json.dumps(data, ensure_ascii=False, indent=4)
+    md5_hex = hashlib.md5(data_str.encode("utf-8")).hexdigest()
+    return CACHE_PREFIX + md5_hex
+
+
+def find_cache_file(content_hash):
+    """
+    Find a cache file with backward compatibility.
+
+    Tries new naming (md5_{hash}_translated.json) first, then falls back
+    to old naming ({hash}_translated.json). If found via old name,
+    renames the file to new naming for gradual migration.
+
+    Args:
+        content_hash: Prefixed hash, e.g. "md5_a1b2c3..."
+
+    Returns:
+        Path to the cache file, or None if not found.
+    """
+    # 1) Try new format: md5_{hash}_translated.json
+    new_path = os.path.join(CACHE_DIR, f"{content_hash}_translated.json")
+    if os.path.exists(new_path):
+        return new_path
+
+    # 2) Try old format (strip prefix): {hash}_translated.json
+    if content_hash.startswith(CACHE_PREFIX):
+        legacy_hash = content_hash[len(CACHE_PREFIX):]
+        legacy_path = os.path.join(CACHE_DIR, f"{legacy_hash}_translated.json")
+        if os.path.exists(legacy_path):
+            # Auto-migrate: rename old → new
+            print(f"Migrating cache: {legacy_hash} → {content_hash}")
+            os.rename(legacy_path, new_path)
+            return new_path
+
+    return None
+
+
+def lookup_translation(json_data_filtered, content_hash, use_remote=True):
+    """
+    Try to find existing translations: local cache → remote → None.
+    Returns (translated_dict, existed) tuple.
+
+    Local is checked first (instant disk read). Remote serves as a
+    community supplement to fill gaps in the local cache.
+
+    Backward-compatible: local cache lookup tries both new and legacy
+    naming, and auto-migrates old files to new naming.
+    """
+    # 1) Try local cache first — instant, no network
+    cache_path = find_cache_file(content_hash)
+    if cache_path:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            translated = json.load(f)
+        print(f"Found in local cache: {content_hash}")
+        # Optionally backfill remote so others benefit
+        if use_remote:
+            print(f"Backfilling remote: {content_hash}")
+            success, msg = save_translated(content_hash, translated)
+            if success:
+                print(f"Saved to remote: {content_hash}")
             else:
-                print(f"翻译结果保存到远程服务器失败: {save_message}")
-        else:
-            print(f"本地缓存中未查找到翻译结果，尝试进行翻译: {jsonDataFilteredBase16}")
-            isExistTranslatedJson = False
-    translate_ref = {}
-    
+                print(f"Remote backfill skipped: {msg}")
+        return translated, True
+
+    # 2) Try remote cache (if enabled)
+    if use_remote:
+        print(f"Not in local cache, trying remote: {content_hash}")
+        is_remote, remote_content = looking_translated(content_hash)
+        if is_remote:
+            # Save to local cache for future instant access
+            local_path = os.path.join(CACHE_DIR, f"{content_hash}_translated.json")
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(remote_content, f, ensure_ascii=False, indent=4)
+            print(f"Found via remote, saved to local: {content_hash}")
+            return remote_content, True
+        print(f"No remote result: {content_hash}")
+
+    # 3) Neither cache has it — need LLM translation
+    print(f"No cached result, translation needed: {content_hash}")
+    return None, False
+
+
+def translate_via_llm(json_data_filtered, api_key, content_hash, use_remote=True):
+    """
+    Send translatable content to LLM for translation.
+    Dynamically injects relevant glossary terms into the system prompt.
+    Returns the translated dictionary.
+    """
+    # Build user message with <input_id> tagged text
+    test_input = (
+        "将以下英文翻译成中文，输出格式为<input_id>key</input_id><text>value</text>，"
+        "其中key为DictKey_开头的键，value为翻译后的中文\n"
+    )
+    for key, value in json_data_filtered.items():
+        test_input += f"<input_id>{key}</input_id><text>{value}</text>\n"
+
+    # Build dynamic glossary appendix for terms found in this text
+    dynamic_prompt = build_dynamic_glossary_prompt(json_data_filtered)
+    full_system_prompt = system_prompt + dynamic_prompt
+
+    try:
+        translated_output = LLM_trans_v2(
+            full_system_prompt, test_input, api_key,
+            CACHE_DIR=CACHE_DIR, CONTENT_HASH=content_hash
+        )
+    except Exception as e:
+        logging.error("Translation error: %s", e)
+        print(f"Translation error: {e}")
+        sys.exit(1)
+
+    # Parse LLM output
+    matches = re.findall(
+        r'<input_id>(.*?)</input_id><text>(.*?)</text>',
+        translated_output, re.DOTALL
+    )
+
+    if not matches:
+        # Model returned unexpected format — save raw output for debugging
+        debug_path = os.path.join(CACHE_DIR, f"{content_hash}_parse_error.txt")
+        with open(debug_path, "w", encoding="utf-8") as f:
+            f.write(translated_output)
+        logging.error(
+            "Parse failed: no <input_id> tags in LLM output. "
+            "Raw output saved to %s", debug_path
+        )
+        print(f"ERROR: LLM returned unrecognizable format. Raw output: {debug_path}")
+        sys.exit(1)
+
     translated_dict = {}
-    if not isExistTranslatedJson:
-        test_input = "将以下英文翻译成中文，输出格式为<input_id>key</input_id><text>value</text>，其中key为DictKey_开头的键，value为翻译后的中文\n"
-        for key, value in jsonDataFiltered.items():
-            test_input += f"<input_id>{key}</input_id><text>{value}</text>\n"
-        
-        try:
-            translated_output = LLM_trans_v2(system_prompt.system_prompt, test_input, api_key, CACHE_DIR=CACHE_DIR, BASE16=jsonDataFilteredBase16)
-        except Exception as e:
-            logging.error(f"翻译过程中出现错误: {e}")
-            print(f"翻译过程中出现错误: {e}")
-            exit(1)
-        # 将translated_output解析为字典
-        try:
-            matches = re.findall(r'<input_id>(.*?)</input_id><text>(.*?)</text>', translated_output, re.DOTALL)
-            for key, value in matches:
-                translated_dict[key] = value.strip()
-        except Exception as e:
-            logging.error(f"解析翻译结果时出现错误: {e}")
-            print(f"解析翻译结果时出现错误: {e}")
-            exit(1)
-        # 上传以及保存到本地
-        print(f"尝试保存翻译结果到远程服务器: {jsonDataFilteredBase16}")
-        save_success, save_message = save_translated(jsonDataFilteredBase16, translated_dict)
-        if save_success:
-            print(f"翻译结果已成功保存到远程服务器: {jsonDataFilteredBase16}")
+    for key, value in matches:
+        translated_dict[key] = value.strip()
+
+    expected = len(json_data_filtered)
+    if len(translated_dict) < expected:
+        logging.warning(
+            "Parse incomplete: got %d/%d translations", len(translated_dict), expected
+        )
+        print(f"Warning: only {len(translated_dict)}/{expected} entries translated")
+
+    # Save to remote (if enabled) and local
+    if use_remote:
+        print(f"Saving to remote: {content_hash}")
+        success, msg = save_translated(content_hash, translated_dict)
+        if success:
+            print(f"Saved to remote successfully: {content_hash}")
         else:
-            print(f"翻译结果保存到远程服务器失败: {save_message}")
-        # 保存到本地
-        print(f"尝试保存翻译结果到本地缓存: {jsonDataFilteredBase16}")
-        with open(os.path.join(CACHE_DIR, f"{jsonDataFilteredBase16}_translated.json"), "w", encoding="utf-8") as f:
-            json.dump(translated_dict, f, ensure_ascii=False, indent=4)
-        print(f"翻译结果已成功保存到本地缓存: {jsonDataFilteredBase16}")
-    else:
-        translated_dict = translatedJson
-        
-    for key, value in jsonDataFiltered.items():
-        # 其中跳过的键值对不进行监测，已有的键值必须在translated_dict中存在，且值不为空，否则进行记录
+            print(f"Failed to save to remote: {msg}")
+
+    cache_path = os.path.join(CACHE_DIR, f"{content_hash}_translated.json")
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(translated_dict, f, ensure_ascii=False, indent=4)
+    print(f"Saved to local cache: {content_hash}")
+
+    return translated_dict
+
+
+def write_translation_ref(json_path, json_data_filtered, translated_dict):
+    """Write the translation reference file (English → Chinese mapping)."""
+    translate_ref = {}
+    for key, value in json_data_filtered.items():
         if key in translated_dict and translated_dict[key]:
             translate_ref[value] = translated_dict[key]
         else:
-            print(f"键 {key} 的翻译结果缺失或为空。")
-        ## 写入翻译参考文件，位于jsonPath同目录下，文件名为jsonPath_translateRef.json
-    with open(os.path.join(os.path.dirname(jsonPath), os.path.splitext(os.path.basename(jsonPath))[0] + "_translateRef.json"), "w", encoding="utf-8") as f:
-        json.dump(translate_ref, f, ensure_ascii=False, indent=4)  # indent=4表示缩进4个空格
-    
-    # 在jsonData中加入翻译结果，原文本下换行然后加入翻译文本
-    for key, value in jsonData.items():
-        if key in translated_dict and translated_dict[key]:
-            translatedText = translated_dict[key]
-            if onlyChs:
-                # 如果只输出中文，则不添加原文本
-                if "[Script]" in key:
-                    jsonData[key] = "[Script]" + translatedText
-                else:
-                    jsonData[key] = translatedText
-            elif "Radio" in key:
-                # 如果是Radio类型的文本，则不添加换行符
-                jsonData[key] = "[" + value + "][" + translatedText + "]"
-            elif "Script" in key:
-                # 如果是Script类型的文本，则不添加换行符
-                jsonData[key] = value + "[" + translatedText + "]"
+            print(f"Missing translation for key: {key}")
+
+    ref_path = os.path.join(
+        os.path.dirname(json_path),
+        os.path.splitext(os.path.basename(json_path))[0] + "_translateRef.json"
+    )
+    with open(ref_path, "w", encoding="utf-8") as f:
+        json.dump(translate_ref, f, ensure_ascii=False, indent=4)
+
+
+def apply_translations(json_data, translated_dict, only_chs):
+    """
+    Merge translations back into the original JSON structure.
+    Handles Script, Radio, and regular text formatting.
+    """
+    for key, value in json_data.items():
+        if key not in translated_dict or not translated_dict[key]:
+            continue
+
+        translated_text = translated_dict[key]
+
+        if only_chs:
+            if "[Script]" in key:
+                json_data[key] = "[Script]" + translated_text
             else:
-                jsonData[key] = value + "\n" + translatedText
+                json_data[key] = translated_text
+        elif "Radio" in key:
+            json_data[key] = "[" + value + "][" + translated_text + "]"
+        elif "Script" in key:
+            json_data[key] = value + "[" + translated_text + "]"
+        else:
+            json_data[key] = value + "\n" + translated_text
 
-            # # 原文本下换行然后加入翻译文本
-            # if onlyChs:
-            #     # 如果只输出中文，则不添加原文本
-            #     if "[Script]" in key:
-            #         jsonData[key] = "[Script]" + translatedText
-            #     else:
-            #         jsonData[key] = translatedText
-            # elif "Radio" in key:
-            #     # 如果是Radio类型的文本，则不添加换行符
-            #     jsonData[key] = "[" + value + "][" + translatedText + "]"
-            # elif "Script" in key:
-            #     # 如果是Script类型的文本，则不添加换行符
-            #     jsonData[key] = value + "[" + translatedText + "]"
-            # else:
-            #     jsonData[key] = value + "\n" + translatedText
-            #
-
-    with open(jsonPath, "w", encoding="utf-8") as f:
-        json.dump(jsonData, f, ensure_ascii=False, indent=4)  # indent=4表示缩进4个空格
-  # 恢复print输出
+    return json_data
 
 
+def read_and_translate_json(json_path, api_key, only_chs, use_remote=True):
+    """Process a single JSON file: filter, translate, merge, write back."""
+    with open(json_path, "r", encoding="utf-8") as f:
+        json_data = json.load(f)
 
-## 命令行输入相关路径，以参数的形式传入
-def transyytg_con(api_key, removeJson, mizPath, onlyChs):
-    # mizPath = "E:/miz-translator/back/"  # 任务路径
-    targetFileInZip = "l10n/DEFAULT/dictionary"
-    fileList = get_files(mizPath)
-    print(fileList)  # 打印文件列表
+    # Filter to translatable entries
+    json_data_filtered = filter_translatable(json_data)
+    content_hash = compute_content_hash(json_data_filtered)
 
-    # 遍历文件列表，解压缩文件
-    for file in fileList:
-        extract_specific_file(file, targetFileInZip, os.path.basename(file) + ".json", output_dir=os.path.dirname(file))
+    # Lookup existing translation or translate
+    translated_dict, existed = lookup_translation(
+        json_data_filtered, content_hash, use_remote=use_remote
+    )
+    if not existed:
+        translated_dict = translate_via_llm(
+            json_data_filtered, api_key, content_hash, use_remote=use_remote
+        )
 
-    import logging
-    ## 设置日志格式
+    # Apply glossary-based corrections (revert over-translated terms, fix missed brevity)
+    translated_dict = correct_translations(json_data_filtered, translated_dict)
 
+    # Write translation reference
+    write_translation_ref(json_path, json_data_filtered, translated_dict)
+
+    # Apply translations back to original JSON
+    json_data = apply_translations(json_data, translated_dict, only_chs)
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_data, f, ensure_ascii=False, indent=4)
+
+
+def transyytg_con(api_key, remove_json, miz_path, only_chs, use_remote=True):
+    """
+    Main translation workflow:
+    1. Find .miz files
+    2. Extract dictionary from each
+    3. Translate JSON content
+    4. Repack into .miz archives
+    """
+    target_file_in_zip = "l10n/DEFAULT/dictionary"
+
+    # Find and extract .miz files
+    file_list = get_files(miz_path)
+    print(f"Found {len(file_list)} .miz file(s):")
+    for f in file_list:
+        print(f"  {f}")
+
+    if len(file_list) == 0:
+        raise FileNotFoundError(
+            f"No .miz files found in: {miz_path}\n"
+            "Please verify the path is correct."
+        )
+
+    for file in file_list:
+        extract_specific_file(
+            file, target_file_in_zip,
+            os.path.basename(file) + ".json",
+            output_dir=os.path.dirname(file)
+        )
+
+    # Set up logging (avoid duplicate handlers on repeated calls)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    file_handler = logging.FileHandler("./cache/log.txt", mode='a', encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
+        file_handler = logging.FileHandler(
+            os.path.join(CACHE_DIR, "log.txt"), mode='a', encoding="utf-8"
+        )
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
-    logging.info("开始处理任务")
-    print("开始处理任务")
+    logging.info("Starting translation task")
+    print("Starting translation task...")
 
-    # jsonsPath = "./jsonfiles2"
-    jsonsPath = mizPath
-    ## 遍历json文件夹下的所有json文件
-    jsonList = get_jsonList(jsonsPath)
-    jsonList.sort()
-    print(jsonList)  # 打印文件列表
-    # try:
-    #     for file in jsonList:
-    #         print("处理文件")
-    #         readAndTranslateJson(file, api_key, base_url, model, hint, onlyChs)
-    # except Exception as e:
-    #     print("处理文件时出错")
-    #     ex = Exception("处理文件时出错", e)
-    #     raise ex
+    # Process each JSON file
+    json_list = get_json_list(miz_path)
+    json_list.sort()
+    print(f"Processing {len(json_list)} JSON file(s):")
+    for f in json_list:
+        print(f"  {f}")
 
-    if(len(fileList) == 0):
-        print("没有找到任务文件，请检查路径是否正确")
-        ex = Exception("没有找到任务文件，请检查路径是否正确")
-        raise ex
-
-    for file in jsonList:
+    for file in json_list:
         try:
-            print("正在处理文件:" + file)
-            readAndTranslateJson(file, api_key, onlyChs)
+            print(f"\nProcessing: {file}")
+            read_and_translate_json(file, api_key, only_chs, use_remote=use_remote)
             dictionary_intract(file)
-            print("正在合并文件:" + file)
-            if removeJson:
+            print(f"Merging into .miz: {file}")
+            if remove_json:
                 os.remove(file)
-                print("删除文件:" + file)
+                print(f"Removed intermediate JSON: {file}")
         except Exception as e:
-            print("出错")
-            ex = Exception("提交任务时出错", e)
-            raise ex
-    
-    print("翻译完成!!!!!")
+            logging.error("Error processing %s: %s", file, e)
+            print(f"Error processing {file}: {e}")
+            raise
 
-    return True
+    print("\nTranslation complete!")
+
+
+# ---------------------------------------------------------------------------
+# CLI Interface
+# ---------------------------------------------------------------------------
+
+DESCRIPTION = """
+DCS Mission Translator v2.0 — 将DCS World .miz任务文件从英文翻译为中文
+Translate DCS World .miz mission files from English to Chinese.
+
+功能特点 Features:
+  - 远程翻译缓存：共享翻译结果，"我为人人、人人为我"
+  - 本地缓存：避免重复翻译相同内容
+  - Lua感知过滤：自动跳过代码，仅翻译自然语言文本
+
+要求:
+  - DeepSeek API Key (https://platform.deepseek.com/)
+  - DCS World .miz 任务文件
+"""
+
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="DCS Mission Translator - DCS任务翻译工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例 Examples:
+  python transyytg_con_cl.py --api-key sk-xxxx --path "E:/DCS/Missions"
+  python transyytg_con_cl.py --api-key sk-xxxx --path ./missions --only-chs
+  python transyytg_con_cl.py  # 交互模式 Interactive mode
+        """,
+    )
+    parser.add_argument(
+        "--api-key", type=str,
+        help="DeepSeek API Key"
+    )
+    parser.add_argument(
+        "--path", type=str,
+        help="包含.miz任务文件的文件夹路径"
+    )
+    parser.add_argument(
+        "--only-chs", action="store_true",
+        help="仅输出中文（默认中英混排）"
+    )
+    parser.add_argument(
+        "--remove-json", action="store_true",
+        help="翻译完成后删除中间JSON文件"
+    )
+    parser.add_argument(
+        "--no-remote", action="store_true",
+        help="禁用远程缓存服务器（仅使用本地缓存和LLM翻译）"
+    )
+    parser.add_argument(
+        "--rollback", action="store_true",
+        help="回滚翻译：移除.miz中的中文翻译，恢复原始英文任务"
+    )
+    return parser.parse_args()
+
+
+def interactive_mode():
+    """Run the translator in interactive prompt mode with saved defaults."""
+    cfg = load_config()
+
+    print(DESCRIPTION)
+    print("=" * 60)
+    print("当前模型: deepseek-v4-pro (固定)")
+    if cfg["use_remote_cache"]:
+        print("远程缓存: 已启用")
+    else:
+        print("远程缓存: 已禁用")
+    print("=" * 60)
+
+    try:
+        # API Key (show masked default if saved)
+        default_key = cfg.get("api_key", "")
+        prompt = "请输入API Key"
+        if default_key:
+            prompt += f" [默认: {mask_api_key(default_key)}]"
+        api_key = input(prompt + ": ").strip()
+        if not api_key and default_key:
+            api_key = default_key
+        if not api_key:
+            print("错误：API Key不能为空。")
+            sys.exit(1)
+
+        # Mission path (show default if saved)
+        default_path = cfg.get("path", "")
+        prompt = "请输入任务文件夹路径"
+        if default_path:
+            prompt += f" [默认: {default_path}]"
+        miz_path = input(prompt + ": ").strip()
+        if not miz_path and default_path:
+            miz_path = default_path
+        if not os.path.exists(miz_path):
+            print(f"错误：路径不存在: {miz_path}")
+            sys.exit(1)
+
+        miz_files = [f for f in os.listdir(miz_path) if f.endswith('.miz')]
+        if not miz_files:
+            print(f"错误：路径内没有找到.miz文件: {miz_path}")
+            sys.exit(1)
+        print(f"找到 {len(miz_files)} 个.miz文件")
+
+        # Output mode
+        default_only = cfg.get("only_chs", False)
+        default_label = "仅中文" if default_only else "混排"
+        choice = input(f"是否中英文混排？(y/n, 默认={default_label}): ").strip().lower()
+        if choice == 'y':
+            only_chs = False
+        elif choice == 'n':
+            only_chs = True
+        else:
+            only_chs = default_only
+
+        # Remove JSON
+        default_remove = cfg.get("remove_json", False)
+        default_label = "是" if default_remove else "否"
+        choice = input(f"是否删除中间JSON文件？(y/n, 默认={default_label}): ").strip().lower()
+        if choice == 'y':
+            remove_json = True
+        elif choice == 'n':
+            remove_json = False
+        else:
+            remove_json = default_remove
+
+        # Remote cache
+        default_remote = cfg.get("use_remote_cache", True)
+        default_label = "启用" if default_remote else "禁用"
+        choice = input(f"是否使用远程缓存服务器？(y/n, 默认={default_label}): ").strip().lower()
+        if choice == 'y':
+            use_remote = True
+        elif choice == 'n':
+            use_remote = False
+        else:
+            use_remote = default_remote
+
+    except (KeyboardInterrupt, EOFError):
+        print("\n已取消。")
+        sys.exit(0)
+
+    # Save config for next session
+    save_config({
+        "api_key": api_key,
+        "path": miz_path,
+        "only_chs": only_chs,
+        "remove_json": remove_json,
+        "use_remote_cache": use_remote,
+    })
+
+    transyytg_con(api_key, remove_json, miz_path, only_chs, use_remote=use_remote)
+
+
+def main():
+    """Main entry point."""
+    ensure_cache_dir()
+    args = parse_args()
+
+    # --- Rollback mode ---
+    if args.rollback:
+        if not args.path:
+            print("错误：回滚需要指定 --path")
+            sys.exit(1)
+        if not os.path.exists(args.path):
+            print(f"错误：路径不存在: {args.path}")
+            sys.exit(1)
+        print("=" * 40)
+        print("  翻译回滚 — 恢复原始英文任务")
+        print("=" * 40)
+        rollback_miz(args.path)
+        print("完成！")
+        return
+
+    # --- Translate mode ---
+    if args.api_key and args.path:
+        # Command-line mode
+        if not os.path.exists(args.path):
+            print(f"错误：路径不存在: {args.path}")
+            sys.exit(1)
+
+        miz_files = [f for f in os.listdir(args.path) if f.endswith('.miz')]
+        if not miz_files:
+            print(f"错误：路径内没有找到.miz文件: {args.path}")
+            sys.exit(1)
+
+        use_remote = not args.no_remote
+
+        print(DESCRIPTION)
+        print(f"API Key: {'*' * 8}{args.api_key[-4:]}")
+        print(f"路径: {args.path}")
+        print(f"仅中文: {args.only_chs}")
+        print(f"删除JSON: {args.remove_json}")
+        print(f"远程缓存: {'禁用' if args.no_remote else '启用'}")
+        print(f"找到 {len(miz_files)} 个.miz文件")
+        print("=" * 60)
+
+        # Save config for next interactive session
+        save_config({
+            "api_key": args.api_key,
+            "path": args.path,
+            "only_chs": args.only_chs,
+            "remove_json": args.remove_json,
+            "use_remote_cache": use_remote,
+        })
+
+        transyytg_con(
+            args.api_key, args.remove_json, args.path, args.only_chs,
+            use_remote=use_remote
+        )
+    else:
+        # Interactive mode
+        interactive_mode()
+
+    print("完成！")
+    if sys.platform == "win32":
+        os.system("pause")
+
 
 if __name__ == "__main__":
-    ## 命令行输入相关路径，以参数的形式传入
-    # parser.add_argument("--api_key", type=str, help="DeepL API Key")
-    # parser.add_argument("--path", type=str, help="Path to the mission files")
-    # ## 帮助
-    # # parser.add_argument("--help", action="help", help="input --api_key and --path\nFor example: xxx.exe --api_key YOUR_API_KEY --path E:/miz-translator/back/")
-    print("本软件为翻译DCS任务文件的工具，使用大模型 API进行翻译")
-    intro = """
-    v2.0版本最大的好处就是我为人人、人人为我，如果你有大模型API Key，那么你可以将翻译结果保存到远程服务器上，供其他人使用，如果你没有大模型API Key，那么你也可以使用其他人的翻译结果，从而节省你的翻译成本。
-    v2.0版本说明如下：
-    1. 增加了远程服务器查找翻译结果的功能，如果远程服务器有翻译结果，则直接使用远程结果，否则从本地缓存中查找，如果本地缓存中也没有，则进行翻译，并将翻译结果保存到远程服务器和本地缓存中。
-    2. 增加了翻译结果保存到远程服务器的功能，如果翻译结果保存到远程服务器失败，则提示用户，并继续保存到本地缓存中。
-    3. 增加了翻译结果保存到本地缓存的功能，如果翻译结果保存到本地缓存失败，则提示用户，并继续保存到远程服务器中。
-    4. 本版本仍然为测试版本，可能存在一些问题，如果遇到问题，请联系作者。或者加QQ群 1033517336
-    """
-    print("作者：YATEIFEI（https://github.com/YaTaiphy/）")
-    print("联系方式：l476579487@126.com")
-    try:
-        # 以下按照命令行进行输入
-        print("当前只支持deepseek-v4-pro模型，其他模型不支持")
-        print("请输出api_key：")
-        api_key = input().strip()
-        print("请输入翻译文件夹路径，：")
-        mizPath = input().strip()
-        # G:\E\miz-translator\python_dp2\python_dp\dist
-        # 验证mizPath是否存在，以及文件夹内是否存在miz文件
-        if not os.path.exists(mizPath):
-            print("翻译文件夹路径不存在，请检查路径是否正确")
-            print("按任意键退出...")
-            os.system("pause")  # 只有Windows有效
-            sys.exit(1)
-        
-        # 验证文件夹内是否存在miz文件
-        miz_files = [f for f in os.listdir(mizPath) if f.endswith('.miz')]
-        if not miz_files:
-            print("翻译文件夹内不存在miz文件，请检查路径是否正确")
-            print("按任意键退出...")
-            os.system("pause")  # 只有Windows有效
-            sys.exit(1)
-
-        removeJson = False
-        
-        print("是否中英文混排？(y/n)：")
-        onlyChs = not input().strip().lower() == 'y'
-        # 对输入错误进行处理
-        while onlyChs not in [True, False]:
-            print("输入错误，请重新输入是否只输出中文？(y/n)：")
-            onlyChs = not input().strip().lower() == 'y'
-    except Exception as e:
-        print("输入参数阶段错误，请检查输入是否正确")
-        print("按任意键退出...")
-        os.system("pause")  # 只有Windows有效
-        sys.exit(1)
-
-    # mizPath = "E:/miz-translator/back/"  # 任务路径
-    targetFileInZip = "l10n/DEFAULT/dictionary"
-
-    ## 如果mizPaths是字符串，则转换为列表
-    if isinstance(mizPath, str):
-        mizPaths = [mizPath]
-
-
-    for mizPath in mizPaths:
-        print(f"正在处理任务文件夹: {mizPath}")
-        try:
-            transyytg_con(api_key, removeJson, mizPath, onlyChs)
-        except Exception as e:
-            print(f"处理任务文件夹 {mizPath} 时出错: {e}")
-            print("按任意键退出...")
-            os.system("pause")
-            sys.exit(1)
-
-    print("翻译完成!!!!!")
-
-    print("按任意键退出...")
-    os.system("pause")  # 只有Windows有效
+    main()
