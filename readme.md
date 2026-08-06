@@ -258,7 +258,7 @@ python fix_translate.py /path/to/missions
 
 ### 远程社区缓存
 
-- 地址：`x,x,x,x:10386`
+- 地址：`x,x,x,x:x`
 - 可通过 `--no-remote` 或在交互模式中选择禁用
 - 角色：社区补充，不阻塞本地即时命中
 
