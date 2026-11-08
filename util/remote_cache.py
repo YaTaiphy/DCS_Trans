@@ -17,6 +17,7 @@ Backward compatibility:
 """
 
 import requests
+from util.output import tlog
 
 IP_ADDRESS = "121.41.75.139"
 PORT = 10386
@@ -40,7 +41,7 @@ def looking_translated(content_hash):
         if response.status_code != 200:
             return False, "Remote server unavailable"
 
-        print("Remote server available, looking up translation...")
+        tlog("Remote server available, looking up translation...")
         response = requests.post(
             f"http://{IP_ADDRESS}:{PORT}/looking_translated",
             json={"mizNameBase16": content_hash},
@@ -53,7 +54,7 @@ def looking_translated(content_hash):
             return False, data.get("message", "Unknown error")
 
     except requests.RequestException as e:
-        print(f"Remote server request failed: {e}")
+        tlog(f"Remote server request failed: {e}")
 
     return False, "Remote lookup not implemented"
 
@@ -84,7 +85,7 @@ def save_translated(content_hash, translated_content):
                 return True, "Saved successfully"
             return False, data.get("message", "Unknown error")
     except requests.RequestException as e:
-        print(f"Remote server request failed: {e}")
+        tlog(f"Remote server request failed: {e}")
 
     return False, "Remote save not implemented"
 

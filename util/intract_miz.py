@@ -1,8 +1,10 @@
 import os
 import json
+import tempfile
 from pathlib import Path
 import shutil
 import zipfile
+from util.output import tlog
 
 def read_json_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
@@ -30,44 +32,43 @@ def dict_to_lua_a_table(py_dict):
 def process_lua_to_zip(lua_str, target_zip_path, internal_zip_path):
     """
     将Lua字符串写入临时文件，追加到ZIP包指定路径，并清理临时文件
-    
+
     :param lua_str: Lua表字符串内容
     :param target_zip_path: 目标ZIP文件绝对路径（如：/data/archive.zip）
     :param internal_zip_path: ZIP内存储路径（如：/l10n/CN/dictionary）
     """
-    # 创建临时工作目录
-    temp_dir = Path("temp_lua_build")
-    temp_dir.mkdir(exist_ok=True)
-    
+    # 创建独立临时目录（线程安全：每次调用 mkdtemp 唯一）
+    temp_dir = Path(tempfile.mkdtemp(prefix="lua_build_"))
+
     try:
         # 定义临时文件路径
         temp_file = temp_dir / "dictionary"
-        
+
         # 1. 写入临时文件
         with open(temp_file, 'w', encoding='utf-8') as f:
             f.write(lua_str)
-        
+
         # 2. 处理目标ZIP路径
         target_zip = Path(target_zip_path)
         target_zip.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # 3. 处理ZIP内路径
         internal_path = Path(internal_zip_path).relative_to('/')  # 移除开头的/
         zip_internal_path = str(internal_path / "dictionary")
-        
+
         # 4. 追加到ZIP文件
         with zipfile.ZipFile(target_zip, 'a', zipfile.ZIP_DEFLATED) as zipf:
             # 删除已存在的旧文件（如果存在）
             if zip_internal_path in zipf.namelist():
                 zipf.remove(zip_internal_path)
-                print(f"已删除旧文件：{zip_internal_path}")
+                tlog(f"已删除旧文件：{zip_internal_path}")
             zipf.write(temp_file, arcname=zip_internal_path)
-        
-        print(f"成功更新ZIP文件：{target_zip}")
-        print(f"ZIP内存储路径：{zip_internal_path}")
-        
+
+        tlog(f"成功更新ZIP文件：{target_zip}")
+        tlog(f"ZIP内存储路径：{zip_internal_path}")
+
     finally:
-        # 5. 清理临时文件
+        # 5. 清理临时目录
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 def dictionary_intract(jsonPath):

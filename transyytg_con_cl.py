@@ -16,8 +16,11 @@ import argparse
 import json
 import re
 import sys
+import time
 import logging
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from util.system_prompt import system_prompt
 from util.LLM_trans import LLM_trans_v2
@@ -27,9 +30,10 @@ from util.lua_reg import isMatchLua
 from util.remote_cache import looking_translated, save_translated
 from util.glossary import correct_translations, build_dynamic_glossary_prompt
 from util.rollback import rollback_miz
-from util.config import load_config, save_config, mask_api_key
+from util.config import load_config, save_config, mask_api_key, get_cache_dir
+from util.output import tlog, flush_tlog, log, ProgressBar
 
-CACHE_DIR = "./cache"
+CACHE_DIR = get_cache_dir()
 
 # ---------------------------------------------------------------------------
 # Cache file naming
@@ -43,6 +47,50 @@ CACHE_DIR = "./cache"
 # ---------------------------------------------------------------------------
 
 CACHE_PREFIX = "md5_"
+
+# ---------------------------------------------------------------------------
+# Multi-threading & robustness
+# ---------------------------------------------------------------------------
+
+MAX_AUTO_WORKERS = 8     # default cap: LLM API is the bottleneck
+MAX_USER_WORKERS = 16    # hard cap for user-specified value
+
+_cache_write_lock = threading.Lock()
+
+
+class TranslationError(Exception):
+    """LLM retries exhausted or output unparseable — single-file failure."""
+
+
+def resolve_worker_count(requested=0):
+    """
+    Resolve worker thread count from user input.
+
+    requested <= 0 → auto (CPU cores - 1, clamped to [1, MAX_AUTO_WORKERS])
+    requested > 0  → clamped to [1, MAX_USER_WORKERS]
+
+    Never returns < 1, even on single-core machines.
+    """
+    cpu = os.cpu_count() or 2
+    auto = max(1, min(cpu - 1, MAX_AUTO_WORKERS))
+    if not requested or requested <= 0:
+        return auto
+    return max(1, min(requested, MAX_USER_WORKERS))
+
+
+def write_cache_file(file_path, data):
+    """
+    Thread-safe atomic cache write.
+
+    Writes to a .tmp file first, then os.replace() for atomic rename.
+    Protected by a module-level lock so concurrent threads writing
+    the same hash don't interleave.
+    """
+    tmp_path = file_path + ".tmp"
+    with _cache_write_lock:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        os.replace(tmp_path, file_path)
 
 
 def ensure_cache_dir():
@@ -74,11 +122,11 @@ def filter_translatable(json_data):
             continue
         if isMatchLua(value):
             logging.info("Skipping Lua code: %s", value[:80])
-            print(f"Skipping Lua code: {value[:80]}...")
+            tlog(f"Skipping Lua code: {value[:80]}...")
             continue
         if "return true" in value or "destroy()" in value or "trigger.action" in value or "return false" in value or "return nil" in value or "return 0" in value:
             logging.info("value是lua函数跳过翻译：\n" + value)
-            print("value是lua函数跳过翻译：\n" + value)
+            tlog("value是lua函数跳过翻译：\n" + value)
             continue
         if len(value) < 2:
             continue
@@ -151,32 +199,31 @@ def lookup_translation(json_data_filtered, content_hash, use_remote=True):
     if cache_path:
         with open(cache_path, "r", encoding="utf-8") as f:
             translated = json.load(f)
-        print(f"Found in local cache: {content_hash}")
+        tlog(f"Found in local cache: {content_hash}")
         # Optionally backfill remote so others benefit
         if use_remote:
-            print(f"Backfilling remote: {content_hash}")
+            tlog(f"Backfilling remote: {content_hash}")
             success, msg = save_translated(content_hash, translated)
             if success:
-                print(f"Saved to remote: {content_hash}")
+                tlog(f"Saved to remote: {content_hash}")
             else:
-                print(f"Remote backfill skipped: {msg}")
+                tlog(f"Remote backfill skipped: {msg}")
         return translated, True
 
     # 2) Try remote cache (if enabled)
     if use_remote:
-        print(f"Not in local cache, trying remote: {content_hash}")
+        tlog(f"Not in local cache, trying remote: {content_hash}")
         is_remote, remote_content = looking_translated(content_hash)
         if is_remote:
             # Save to local cache for future instant access
             local_path = os.path.join(CACHE_DIR, f"{content_hash}_translated.json")
-            with open(local_path, "w", encoding="utf-8") as f:
-                json.dump(remote_content, f, ensure_ascii=False, indent=4)
-            print(f"Found via remote, saved to local: {content_hash}")
+            write_cache_file(local_path, remote_content)
+            tlog(f"Found via remote, saved to local: {content_hash}")
             return remote_content, True
-        print(f"No remote result: {content_hash}")
+        tlog(f"No remote result: {content_hash}")
 
     # 3) Neither cache has it — need LLM translation
-    print(f"No cached result, translation needed: {content_hash}")
+    tlog(f"No cached result, translation needed: {content_hash}")
     return None, False
 
 
@@ -184,8 +231,14 @@ def translate_via_llm(json_data_filtered, api_key, content_hash, use_remote=True
     """
     Send translatable content to LLM for translation.
     Dynamically injects relevant glossary terms into the system prompt.
+
     Returns the translated dictionary.
+
+    Raises TranslationError on LLM failure or unparseable output
+    (instead of aborting the entire batch like the old sys.exit(1)).
     """
+    t_start = time.monotonic()
+
     # Build user message with <input_id> tagged text
     test_input = (
         "将以下英文翻译成中文，输出格式为<input_id>key</input_id><text>value</text>，"
@@ -205,8 +258,7 @@ def translate_via_llm(json_data_filtered, api_key, content_hash, use_remote=True
         )
     except Exception as e:
         logging.error("Translation error: %s", e)
-        print(f"Translation error: {e}")
-        sys.exit(1)
+        raise TranslationError(f"LLM translation failed: {e}") from e
 
     # Parse LLM output
     matches = re.findall(
@@ -223,8 +275,9 @@ def translate_via_llm(json_data_filtered, api_key, content_hash, use_remote=True
             "Parse failed: no <input_id> tags in LLM output. "
             "Raw output saved to %s", debug_path
         )
-        print(f"ERROR: LLM returned unrecognizable format. Raw output: {debug_path}")
-        sys.exit(1)
+        raise TranslationError(
+            f"LLM returned unrecognizable format. Raw output: {debug_path}"
+        )
 
     translated_dict = {}
     for key, value in matches:
@@ -232,26 +285,28 @@ def translate_via_llm(json_data_filtered, api_key, content_hash, use_remote=True
 
     expected = len(json_data_filtered)
     if len(translated_dict) < expected:
+        n_entries = len(translated_dict)
         logging.warning(
-            "Parse incomplete: got %d/%d translations", len(translated_dict), expected
+            "Parse incomplete: got %d/%d translations", n_entries, expected
         )
-        print(f"Warning: only {len(translated_dict)}/{expected} entries translated")
+        tlog(f"Warning: only {n_entries}/{expected} entries translated")
+
+    elapsed = time.monotonic() - t_start
 
     # Save to remote (if enabled) and local
     if use_remote:
-        print(f"Saving to remote: {content_hash}")
+        tlog(f"Saving to remote: {content_hash}")
         success, msg = save_translated(content_hash, translated_dict)
         if success:
-            print(f"Saved to remote successfully: {content_hash}")
+            tlog(f"Saved to remote successfully: {content_hash}")
         else:
-            print(f"Failed to save to remote: {msg}")
+            tlog(f"Failed to save to remote: {msg}")
 
     cache_path = os.path.join(CACHE_DIR, f"{content_hash}_translated.json")
-    with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(translated_dict, f, ensure_ascii=False, indent=4)
-    print(f"Saved to local cache: {content_hash}")
+    write_cache_file(cache_path, translated_dict)
+    tlog(f"Saved to local cache: {content_hash}")
 
-    return translated_dict
+    return translated_dict, elapsed, len(translated_dict)
 
 
 def write_translation_ref(json_path, json_data_filtered, translated_dict):
@@ -298,7 +353,15 @@ def apply_translations(json_data, translated_dict, only_chs):
 
 
 def read_and_translate_json(json_path, api_key, only_chs, use_remote=True):
-    """Process a single JSON file: filter, translate, merge, write back."""
+    """
+    Process a single JSON file: filter, translate, merge, write back.
+
+    Returns:
+        (source: str, n_entries: int, elapsed: float|None)
+        source: "llm" | "cache" | "remote"
+        n_entries: number of translated entries
+        elapsed: LLM time in seconds (None for cache hits)
+    """
     with open(json_path, "r", encoding="utf-8") as f:
         json_data = json.load(f)
 
@@ -310,10 +373,15 @@ def read_and_translate_json(json_path, api_key, only_chs, use_remote=True):
     translated_dict, existed = lookup_translation(
         json_data_filtered, content_hash, use_remote=use_remote
     )
+    source = "cache"
+    elapsed = None
+    n_entries = len(translated_dict) if existed else 0
+
     if not existed:
-        translated_dict = translate_via_llm(
+        translated_dict, elapsed, n_entries = translate_via_llm(
             json_data_filtered, api_key, content_hash, use_remote=use_remote
         )
+        source = "llm"
 
     # Apply glossary-based corrections (revert over-translated terms, fix missed brevity)
     translated_dict = correct_translations(json_data_filtered, translated_dict)
@@ -327,28 +395,77 @@ def read_and_translate_json(json_path, api_key, only_chs, use_remote=True):
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(json_data, f, ensure_ascii=False, indent=4)
 
+    return source, n_entries, elapsed
 
-def transyytg_con(api_key, remove_json, miz_path, only_chs, use_remote=True):
+
+def process_single_json(file, api_key, only_chs, use_remote, remove_json):
+    """
+    Worker function: translate one JSON file and repack into .miz.
+
+    All exceptions are caught internally — this function NEVER raises
+    to the thread pool, so one bad file won't cancel other futures.
+
+    Returns:
+        {"path": str, "status": "ok"|"failed",
+         "source": "llm"|"cache"|"remote"|None,
+         "n_entries": int, "elapsed": float|None, "error": str|None}
+    """
+    try:
+        source, n_entries, elapsed = read_and_translate_json(
+            file, api_key, only_chs, use_remote=use_remote
+        )
+        dictionary_intract(file)
+        tlog(f"Merging into .miz: {file}")
+        if remove_json:
+            os.remove(file)
+            tlog(f"Removed intermediate JSON: {file}")
+        return {
+            "path": file, "status": "ok",
+            "source": source, "n_entries": n_entries,
+            "elapsed": elapsed, "error": None,
+            "lines": flush_tlog(),
+        }
+    except Exception as e:
+        logging.error("Error processing %s: %s", file, e, exc_info=True)
+        tlog(f"Error: {e}")
+        return {
+            "path": file, "status": "failed",
+            "source": None, "n_entries": 0,
+            "elapsed": None, "error": str(e),
+            "lines": flush_tlog(),
+        }
+
+
+def transyytg_con(api_key, remove_json, miz_paths, only_chs,
+                  use_remote=True, threads=0):
     """
     Main translation workflow:
-    1. Find .miz files
+    1. Find .miz files across one or more directories
     2. Extract dictionary from each
-    3. Translate JSON content
+    3. Translate JSON content (multi-threaded, across all folders)
     4. Repack into .miz archives
+
+    Args:
+        miz_paths: Single path string, or list of path strings
     """
+    # Normalize to list
+    if isinstance(miz_paths, str):
+        miz_paths = [miz_paths]
+
     target_file_in_zip = "l10n/DEFAULT/dictionary"
 
-    # Find and extract .miz files
-    file_list = get_files(miz_path)
-    print(f"Found {len(file_list)} .miz file(s):")
-    for f in file_list:
-        print(f"  {f}")
-
-    if len(file_list) == 0:
+    # Find and extract .miz files from all paths
+    file_list = []
+    for p in miz_paths:
+        file_list.extend(get_files(p))
+    if not file_list:
         raise FileNotFoundError(
-            f"No .miz files found in: {miz_path}\n"
-            "Please verify the path is correct."
+            f"No .miz files found in: {', '.join(miz_paths)}\n"
+            "Please verify the path(s) are correct."
         )
+    log(f"Found {len(file_list)} .miz file(s) across {len(miz_paths)} folder(s):")
+    for f in file_list:
+        log(f"  {f}")
 
     for file in file_list:
         extract_specific_file(
@@ -357,43 +474,116 @@ def transyytg_con(api_key, remove_json, miz_path, only_chs, use_remote=True):
             output_dir=os.path.dirname(file)
         )
 
-    # Set up logging (avoid duplicate handlers on repeated calls)
+    # Set up logging with rotation (avoid duplicate handlers on repeated calls)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
-        file_handler = logging.FileHandler(
-            os.path.join(CACHE_DIR, "log.txt"), mode='a', encoding="utf-8"
+        from logging.handlers import RotatingFileHandler
+        log_path = os.path.join(CACHE_DIR, "trans.log")
+        file_handler = RotatingFileHandler(
+            log_path, mode='a', encoding="utf-8",
+            maxBytes=1 * 1024 * 1024,  # 1 MB per file
+            backupCount=5              # keep last 5 rotated logs
         )
         file_handler.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-    logging.info("Starting translation task")
-    print("Starting translation task...")
-
-    # Process each JSON file
-    json_list = get_json_list(miz_path)
+    # Collect JSON files from all paths
+    json_list = []
+    for p in miz_paths:
+        json_list.extend(get_json_list(p))
     json_list.sort()
-    print(f"Processing {len(json_list)} JSON file(s):")
+
+    # Resolve worker count
+    workers = resolve_worker_count(threads)
+    cpu = os.cpu_count() or 2
+    if threads <= 0:
+        log(f"线程数: {workers} (自动 · CPU {cpu}核)")
+    else:
+        log(f"线程数: {workers} (手动指定)")
+
+    logging.info("Starting translation task")
+    log(f"Processing {len(json_list)} JSON file(s) with {workers} worker(s):")
     for f in json_list:
-        print(f"  {f}")
+        log(f"  {f}")
 
-    for file in json_list:
+    # Pre-warm glossary to avoid lazy-load races in worker threads
+    from util.glossary import load_glossary
+    load_glossary()
+
+    # --- Multi-threaded processing ---
+    status_counts = {"llm": 0, "cache": 0, "remote": 0, "failed": 0}
+    results = []
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                process_single_json, f, api_key, only_chs,
+                use_remote, remove_json
+            ): f
+            for f in json_list
+        }
+        bar = ProgressBar(len(json_list))
+
         try:
-            print(f"\nProcessing: {file}")
-            read_and_translate_json(file, api_key, only_chs, use_remote=use_remote)
-            dictionary_intract(file)
-            print(f"Merging into .miz: {file}")
-            if remove_json:
-                os.remove(file)
-                print(f"Removed intermediate JSON: {file}")
-        except Exception as e:
-            logging.error("Error processing %s: %s", file, e)
-            print(f"Error processing {file}: {e}")
-            raise
+            for fut in as_completed(futures):
+                r = fut.result()
+                results.append(r)
 
-    print("\nTranslation complete!")
+                # Update status counters
+                if r["status"] == "ok":
+                    src = r["source"] or "cache"
+                    if src in status_counts:
+                        status_counts[src] += 1
+                else:
+                    status_counts["failed"] += 1
+
+                # Print completion block (main thread only — no interleaving)
+                _print_result_block(r)
+
+                # Refresh progress bar
+                bar.update(len(results), status_counts)
+
+        except KeyboardInterrupt:
+            executor.shutdown(wait=False, cancel_futures=True)
+            bar.finish()
+            log(f"\n已中断，已处理 {len(results)}/{len(json_list)} 个文件")
+            sys.exit(130)
+
+    bar.finish()
+
+    # --- Summary ---
+    success = [r for r in results if r["status"] == "ok"]
+    failed = [r for r in results if r["status"] == "failed"]
+    log(f"\n{'=' * 60}")
+    log(f"完成: {len(success)} 成功, {len(failed)} 失败 (共 {len(json_list)} 个)")
+    if failed:
+        log("失败文件:")
+        for r in failed:
+            err = f" — {r['error']}" if r.get("error") else ""
+            log(f"  ❌ {r['path']}{err}")
+        sys.exit(1)
+
+
+def _print_result_block(r):
+    """Print a single-file completion block (called from main thread only)."""
+    if r["status"] == "ok":
+        src_label = {"llm": "LLM", "cache": "本地缓存", "remote": "远程缓存"}.get(
+            r["source"], r["source"]
+        )
+        suffix = f" · {r['n_entries']} 条"
+        if r["elapsed"] is not None:
+            suffix += f" · {r['elapsed']:.0f}s"
+        log(f"✅ {r['path']}  (来源: {src_label}{suffix})")
+    else:
+        log(f"❌ {r['path']}")
+        if r["error"]:
+            log(f"   {r['error']}")
+    # Print buffered worker messages
+    for line in r.get("lines", []):
+        log(f"   {line}")
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +613,7 @@ def parse_args():
         epilog="""
 使用示例 Examples:
   python transyytg_con_cl.py --api-key sk-xxxx --path "E:/DCS/Missions"
-  python transyytg_con_cl.py --api-key sk-xxxx --path ./missions --only-chs
+  python transyytg_con_cl.py --api-key sk-xxxx --path ./m1 ./m2 --only-chs
   python transyytg_con_cl.py  # 交互模式 Interactive mode
         """,
     )
@@ -432,8 +622,8 @@ def parse_args():
         help="DeepSeek API Key"
     )
     parser.add_argument(
-        "--path", type=str,
-        help="包含.miz任务文件的文件夹路径"
+        "--path", type=str, nargs='+',
+        help="包含.miz任务文件的文件夹路径（可多个）"
     )
     parser.add_argument(
         "--only-chs", action="store_true",
@@ -450,6 +640,10 @@ def parse_args():
     parser.add_argument(
         "--rollback", action="store_true",
         help="回滚翻译：移除.miz中的中文翻译，恢复原始英文任务"
+    )
+    parser.add_argument(
+        "--threads", type=int, default=0,
+        help=f"并发线程数（0=自动根据CPU核心，范围 1-{MAX_USER_WORKERS}）"
     )
     return parser.parse_args()
 
@@ -480,23 +674,41 @@ def interactive_mode():
             print("错误：API Key不能为空。")
             sys.exit(1)
 
-        # Mission path (show default if saved)
+        # Mission path(s) — enter one per line, blank line to finish
         default_path = cfg.get("path", "")
-        prompt = "请输入任务文件夹路径"
+        miz_paths = []
         if default_path:
-            prompt += f" [默认: {default_path}]"
-        miz_path = input(prompt + ": ").strip()
-        if not miz_path and default_path:
-            miz_path = default_path
-        if not os.path.exists(miz_path):
-            print(f"错误：路径不存在: {miz_path}")
+            print(f"默认路径: {default_path}")
+            choice = input("使用默认路径？(回车=是, 输入任意内容=手动输入): ").strip()
+            if not choice:
+                # Use saved default, split by stored separator
+                import re as _re
+                miz_paths = [p.strip() for p in _re.split(r'[,;，；]+', default_path) if p.strip()]
+        if not miz_paths:
+            print("请输入任务文件夹路径（每行一个，空行结束）:")
+            while True:
+                line = input().strip()
+                if not line:
+                    break
+                miz_paths.append(line)
+        if not miz_paths:
+            print("错误：至少需要一个路径。")
             sys.exit(1)
 
-        miz_files = [f for f in os.listdir(miz_path) if f.endswith('.miz')]
-        if not miz_files:
-            print(f"错误：路径内没有找到.miz文件: {miz_path}")
+        # Validate each path
+        for p in miz_paths:
+            if not os.path.exists(p):
+                print(f"错误：路径不存在: {p}")
+                sys.exit(1)
+
+        total_miz = 0
+        for p in miz_paths:
+            n = len([f for f in os.listdir(p) if f.endswith('.miz')])
+            total_miz += n
+        if total_miz == 0:
+            print(f"错误：路径内没有找到.miz文件: {', '.join(miz_paths)}")
             sys.exit(1)
-        print(f"找到 {len(miz_files)} 个.miz文件")
+        print(f"找到 {total_miz} 个.miz文件（{len(miz_paths)} 个文件夹）")
 
         # Output mode
         default_only = cfg.get("only_chs", False)
@@ -531,6 +743,17 @@ def interactive_mode():
         else:
             use_remote = default_remote
 
+        # Threads
+        default_threads = cfg.get("threads", 0)
+        auto = resolve_worker_count(0)
+        prompt = f"并发线程数? [回车=自动({auto}), 范围 1-{MAX_USER_WORKERS}]: "
+        choice = input(prompt).strip()
+        try:
+            threads = int(choice) if choice else 0
+        except ValueError:
+            threads = 0
+        threads = resolve_worker_count(threads)
+
     except (KeyboardInterrupt, EOFError):
         print("\n已取消。")
         sys.exit(0)
@@ -538,13 +761,15 @@ def interactive_mode():
     # Save config for next session
     save_config({
         "api_key": api_key,
-        "path": miz_path,
+        "path": ", ".join(miz_paths),
         "only_chs": only_chs,
         "remove_json": remove_json,
         "use_remote_cache": use_remote,
+        "threads": threads,
     })
 
-    transyytg_con(api_key, remove_json, miz_path, only_chs, use_remote=use_remote)
+    transyytg_con(api_key, remove_json, miz_paths, only_chs,
+                  use_remote=use_remote, threads=threads)
 
 
 def main():
@@ -557,51 +782,63 @@ def main():
         if not args.path:
             print("错误：回滚需要指定 --path")
             sys.exit(1)
-        if not os.path.exists(args.path):
-            print(f"错误：路径不存在: {args.path}")
-            sys.exit(1)
+        for p in args.path:
+            if not os.path.exists(p):
+                print(f"错误：路径不存在: {p}")
+                sys.exit(1)
         print("=" * 40)
         print("  翻译回滚 — 恢复原始英文任务")
         print("=" * 40)
-        rollback_miz(args.path)
+        for p in args.path:
+            rollback_miz(p)
         print("完成！")
         return
 
     # --- Translate mode ---
     if args.api_key and args.path:
-        # Command-line mode
-        if not os.path.exists(args.path):
-            print(f"错误：路径不存在: {args.path}")
-            sys.exit(1)
+        # Command-line mode — args.path is a list from nargs='+'
+        miz_paths = args.path
 
-        miz_files = [f for f in os.listdir(args.path) if f.endswith('.miz')]
-        if not miz_files:
-            print(f"错误：路径内没有找到.miz文件: {args.path}")
-            sys.exit(1)
+        # Validate all paths
+        for p in miz_paths:
+            if not os.path.exists(p):
+                print(f"错误：路径不存在: {p}")
+                sys.exit(1)
 
         use_remote = not args.no_remote
+        threads = resolve_worker_count(args.threads)
+
+        # Count .miz files across all paths
+        total_miz = 0
+        for p in miz_paths:
+            total_miz += len([f for f in os.listdir(p) if f.endswith('.miz')])
+        if total_miz == 0:
+            print(f"错误：路径内没有找到.miz文件: {', '.join(miz_paths)}")
+            sys.exit(1)
 
         print(DESCRIPTION)
         print(f"API Key: {'*' * 8}{args.api_key[-4:]}")
-        print(f"路径: {args.path}")
+        print(f"路径: {', '.join(miz_paths)}")
         print(f"仅中文: {args.only_chs}")
         print(f"删除JSON: {args.remove_json}")
         print(f"远程缓存: {'禁用' if args.no_remote else '启用'}")
-        print(f"找到 {len(miz_files)} 个.miz文件")
+        print(f"线程数: {threads}")
+        print(f"找到 {total_miz} 个.miz文件（{len(miz_paths)} 个文件夹）")
         print("=" * 60)
 
         # Save config for next interactive session
         save_config({
             "api_key": args.api_key,
-            "path": args.path,
+            "path": ", ".join(miz_paths),
             "only_chs": args.only_chs,
             "remove_json": args.remove_json,
             "use_remote_cache": use_remote,
+            "threads": args.threads,
         })
 
         transyytg_con(
-            args.api_key, args.remove_json, args.path, args.only_chs,
-            use_remote=use_remote
+            args.api_key, args.remove_json, miz_paths, args.only_chs,
+            use_remote=use_remote, threads=args.threads
         )
     else:
         # Interactive mode

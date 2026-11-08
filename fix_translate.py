@@ -17,6 +17,26 @@ import sys
 import json
 
 
+# ---------------------------------------------------------------------------
+# Path resolution (mirrors util/config.py — avoids circular import)
+# ---------------------------------------------------------------------------
+def _is_bundled():
+    if getattr(sys, 'frozen', False):
+        return True
+    exe_name = os.path.basename(sys.executable).lower()
+    return not exe_name.startswith('python')
+
+
+def _get_app_root():
+    if _is_bundled():
+        return os.path.dirname(sys.executable)
+    return os.getcwd()
+
+
+def _get_cache_dir():
+    return os.path.join(_get_app_root(), "cache")
+
+
 def find_translate_ref_files(folder_path):
     """Find all _translateRef.json files in the given directory tree."""
     ref_files = []
@@ -27,11 +47,13 @@ def find_translate_ref_files(folder_path):
     return ref_files
 
 
-def merge_translations(ref_files, output_path="./cache/translated.json"):
+def merge_translations(ref_files, output_path=None):
     """
     Merge all translation reference files into a consolidated cache.
     For conflicting keys, the value from the reference file takes precedence.
     """
+    if output_path is None:
+        output_path = os.path.join(_get_cache_dir(), "translated.json")
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 

@@ -86,8 +86,8 @@
 </head>
 <body>
 
-<h1>DCS Mission Translator <small>v2.2</small></h1>
-<p>将 DCS World 数字战斗模拟的 <code>.miz</code> 任务文件从英文翻译为简体中文，使用 DeepSeek v4 Pro 大模型 API。</p>
+<h1>DCS Mission Translator <small>v2.3</small></h1>
+<p>将 DCS World 数字战斗模拟的 <code>.miz</code> 任务文件从英文翻译为简体中文，使用 DeepSeek v4 Pro 大模型 API。支持多线程并发、多文件夹批量处理、超时重试、实时进度显示。</p>
 
 <div id="toc">
 <strong>目录</strong>
@@ -118,8 +118,11 @@
 <pre><code># 安装依赖
 pip install openai requests
 
-# 翻译一个任务文件夹
+# 翻译一个任务文件夹（自动线程数）
 python transyytg_con_cl.py --api-key sk-your-key --path "E:\DCS\Missions"
+
+# 多个文件夹 + 指定线程数
+python transyytg_con_cl.py --api-key sk-your-key --path ./m1 ./m2 --threads 4
 
 # 或者交互模式（推荐首次使用）
 python transyytg_con_cl.py
@@ -158,15 +161,19 @@ source .venv/Scripts/activate</code></pre>
 <table>
 <tr><th>参数</th><th>说明</th><th>示例</th></tr>
 <tr><td><code>--api-key</code></td><td>DeepSeek API Key</td><td><code>--api-key sk-xxxx</code></td></tr>
-<tr><td><code>--path</code></td><td>包含 .miz 文件的文件夹路径</td><td><code>--path "E:/DCS/Missions"</code></td></tr>
+<tr><td><code>--path</code></td><td>包含 .miz 的文件夹路径（可多个，空格分隔）</td><td><code>--path ./m1 ./m2</code></td></tr>
+<tr><td><code>--threads</code></td><td>并发线程数（0=自动）<span class="tag tag-new">v2.3</span></td><td><code>--threads 4</code></td></tr>
 <tr><td><code>--only-chs</code></td><td>仅输出中文（默认中英混排）</td><td><code>--only-chs</code></td></tr>
 <tr><td><code>--remove-json</code></td><td>翻译完成后删除中间 JSON 文件</td><td><code>--remove-json</code></td></tr>
 <tr><td><code>--no-remote</code></td><td>禁用远程社区缓存服务器</td><td><code>--no-remote</code></td></tr>
 <tr><td><code>--rollback</code></td><td>回滚翻译，恢复原始英文<span class="tag tag-new">v2.2</span></td><td><code>--rollback</code></td></tr>
 </table>
 
-<pre><code># 基础翻译
+<pre><code># 基础翻译（单文件夹）
 python transyytg_con_cl.py --api-key sk-xxxx --path "E:/DCS/Missions"
+
+# 多文件夹 + 指定线程
+python transyytg_con_cl.py --api-key sk-xxxx --path ./m1 ./m2 --threads 4
 
 # 仅中文 + 离线模式 + 清理中间文件
 python transyytg_con_cl.py --api-key sk-xxxx --path ./missions --only-chs --no-remote --remove-json</code></pre>
@@ -178,16 +185,24 @@ python transyytg_con_cl.py --api-key sk-xxxx --path ./missions --only-chs --no-r
 <pre><code>python transyytg_con_cl.py</code></pre>
 
 <pre><code>============================================================
-DCS Mission Translator v2.2
+DCS Mission Translator v2.3
 当前模型: deepseek-v4-pro (固定)
 远程缓存: 已启用
 ============================================================
-请输入API Key [默认: ********cdef]:        <em>← 回车使用已保存的 Key</em>
-请输入任务文件夹路径 [默认: E:/DCS/Missions]: <em>← 回车使用上次路径</em>
-找到 3 个.miz文件
-是否中英文混排？(y/n, 默认=混排):          <em>← 回车保持默认</em>
+请输入API Key [默认: ********cdef]:            <em>← 回车使用已保存的 Key</em>
+默认路径: E:/DCS/Missions, G:/Missions/F-14A
+使用默认路径？(回车=是, 输入任意内容=手动输入):   <em>← 回车使用默认路径</em>
+
+# 如选择手动输入：
+请输入任务文件夹路径（每行一个，空行结束）:
+E:\DCS World\Mods\campaigns
+G:\Missions\F-14A
+                                               <em>← 空行结束</em>
+找到 5 个.miz文件（2 个文件夹）
+是否中英文混排？(y/n, 默认=混排):              <em>← 回车保持默认</em>
 是否删除中间JSON文件？(y/n, 默认=否):
 是否使用远程缓存服务器？(y/n, 默认=启用):
+并发线程数? [回车=自动(7), 范围 1-16]:        <em>← 回车自动</em>
 </code></pre>
 
 <h3 id="rollback">3.3 翻译回滚 <span class="tag tag-new">v2.2</span></h3>
@@ -290,7 +305,7 @@ DCS Mission Translator v2.2
   <div class="flow-num">6</div>
   <div class="flow-content">
     <strong>LLM 翻译</strong>
-    <span>DeepSeek v4 Pro，reasoning_effort=high，thinking enabled</span>
+    <span>DeepSeek v4 Pro，reasoning_effort=high。180s 超时 + 3次指数退避重试。多文件通过线程池并发执行<span class="tag tag-new">v2.3</span></span>
   </div>
 </div>
 
@@ -298,7 +313,7 @@ DCS Mission Translator v2.2
   <div class="flow-num">7</div>
   <div class="flow-content">
     <strong>解析输出</strong>
-    <span>正则提取 &lt;input_id&gt; 标签，校验数量，空结果报错退出</span>
+    <span>正则提取 &lt;input_id&gt; 标签，校验数量。空结果保存 raw 后将该文件标记为失败，不中止其余任务<span class="tag tag-new">v2.3</span></span>
   </div>
 </div>
 
@@ -334,7 +349,7 @@ DCS Mission Translator v2.2
 <tr><td><code>md5_{hash}_translated.json</code></td><td>解析后的翻译字典</td><td>JSON dict</td></tr>
 <tr><td><code>md5_{hash}_raw.txt</code></td><td>LLM 原始响应</td><td>纯文本（调试用）</td></tr>
 <tr><td><code>config.json</code></td><td>持久化配置</td><td>JSON</td></tr>
-<tr><td><code>log.txt</code></td><td>运行日志</td><td>文本</td></tr>
+<tr><td><code>trans.log</code></td><td>运行日志（自动轮转 1MB×5）<span class="tag tag-new">v2.3</span></td><td>文本</td></tr>
 </table>
 
 <h3>6.3 远程社区缓存</h3>
@@ -396,10 +411,11 @@ DCS Mission Translator v2.2
 
 <pre><code>{
   "api_key": "sk-xxxx",
-  "path": "E:/DCS/Missions",
+  "path": "E:/DCS/Missions, G:/Missions/F-14A",
   "only_chs": false,
   "remove_json": false,
-  "use_remote_cache": true
+  "use_remote_cache": true,
+  "threads": 0
 }</code></pre>
 
 <ul>
@@ -415,10 +431,30 @@ DCS Mission Translator v2.2
 <!-- ================================================================== -->
 <h2 id="build">9. 构建独立 EXE</h2>
 
+<h3>9.1 Nuitka（推荐）<span class="tag tag-new">v2.3</span></h3>
+
+<p>Nuitka 将 Python 编译为原生机器码，性能优于 PyInstaller：</p>
+
+<pre><code>pip install nuitka
+
+nuitka --standalone --onefile \
+  --enable-plugin=upx \
+  --upx-binary="upx.exe" \
+  --windows-icon-from-ico=./favicon.ico \
+  --lto=yes \
+  --include-data-files=util/military_glossary.json=util/military_glossary.json \
+  --output-filename="transyytg_con_cl v2.3.exe" transyytg_con_cl.py</code></pre>
+
+<div class="warn">
+<strong>重要</strong>：<code>--include-data-files</code> 必须包含 <code>military_glossary.json</code>（军事术语库），否则打包后的 exe 运行时将报错找不到该文件。
+</div>
+
+<p>生成单个 <code>.exe</code> 文件，双击即可运行。exe 所在目录会自动创建 <code>cache/</code> 存放配置和翻译缓存。</p>
+
+<h3>9.2 PyInstaller（备选）</h3>
+
 <pre><code>pip install pyinstaller
 pyinstaller -F transyytg_con_cl.py -i favicon.ico</code></pre>
-
-<p>生成的 <code>transyytg_con_cl.exe</code> 在 <code>./dist/</code> 目录下，可独立运行（无需安装 Python）。</p>
 
 <p>如需包含自定义图标，将 <code>.ico</code> 文件放在项目根目录。</p>
 
@@ -436,6 +472,11 @@ pyinstaller -F transyytg_con_cl.py -i favicon.ico</code></pre>
   <td>翻译过程中报错</td>
   <td>API Key 无效或余额不足</td>
   <td>检查 <a href="https://platform.deepseek.com/" target="_blank">DeepSeek 控制台</a></td>
+</tr>
+<tr>
+  <td>LLM 调用超时/失败</td>
+  <td>网络波动或服务端繁忙</td>
+  <td>自动重试最多 3 次（3s/6s/12s 退避），单文件失败不中止整个任务<span class="tag tag-new">v2.3</span></td>
 </tr>
 <tr>
   <td>LLM 返回无法解析</td>
@@ -467,12 +508,22 @@ pyinstaller -F transyytg_con_cl.py -i favicon.ico</code></pre>
   <td>配置文件未生成</td>
   <td>完成一次完整翻译流程后自动保存，下次即可使用默认值</td>
 </tr>
+<tr>
+  <td>exe 双击没反应</td>
+  <td>无法创建 cache 目录或无依赖缺失</td>
+  <td>在命令行运行 exe 查看错误输出；确保 exe 所在目录可写</td>
+</tr>
+<tr>
+  <td>打包后报错找不到术语库</td>
+  <td>Nuitka 未包含数据文件</td>
+  <td>添加 <code>--include-data-files=util/military_glossary.json=util/military_glossary.json</code></td>
+</tr>
 </table>
 
 <hr style="margin: 3rem 0 1rem; border-color: var(--border);">
 
 <p style="text-align:center; color: var(--muted); font-size: .85em;">
-  DCS Mission Translator v2.2 &mdash; YATEIFEI &mdash;
+  DCS Mission Translator v2.3 &mdash; YATEIFEI &mdash;
   <a href="https://github.com/YaTaiphy/DCS_Trans">GitHub</a> &mdash;
   联系: l476579487@126.com &mdash; QQ群: 1033517336
 </p>

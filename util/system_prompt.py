@@ -3,7 +3,7 @@ system_prompt = """
 
 【术语保留 — 以下内容不翻译，保持原文】
 - 武器码: Fox-1/2/3, Maverick, Magnum, Rifle, Bruiser, Pig
-- 呼号/代号: 如 Raven 1-1, Strike, Saint, Blade, Texaco, Marshal, Tower, Departure
+- 呼号/代号: 如 Raven 1-1, Strike, Saint, Blade, Texaco, Marshal, Tower, Departure, Devil（飞行编队呼号，Devils = 多个编队，非"魔鬼"）
 - 坐标数字: 如 "308 for 10", "bullseye 325 for 126"
 - 特殊代号/昵称: 如 rock, windmill, bogey, skunk
 - 无线电频道: 如 "CH2 on COMM1", "PRI", "AUX"

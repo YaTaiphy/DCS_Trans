@@ -8,9 +8,48 @@ Stored at ./cache/config.json (gitignored — contains API key).
 """
 
 import os
+import sys
 import json
 
-CONFIG_PATH = "./cache/config.json"
+
+# ---------------------------------------------------------------------------
+# Path resolution — works in dev AND bundled exe (Nuitka/PyInstaller)
+# ---------------------------------------------------------------------------
+# When a compiled exe is double-clicked from Explorer, CWD is unreliable
+# (it can be system32, desktop, etc.). We resolve cache/config paths
+# relative to the exe's location when running as a bundled app, and
+# relative to CWD when running from source (python <script>.py).
+# ---------------------------------------------------------------------------
+
+
+def _is_bundled():
+    """Detect whether we're running as a compiled standalone executable."""
+    if getattr(sys, 'frozen', False):
+        return True  # PyInstaller
+    exe_name = os.path.basename(sys.executable).lower()
+    # In development, sys.executable is python.exe / pythonw.exe / python3.11.exe
+    # When compiled (Nuitka), it's the custom exe name
+    return not exe_name.startswith('python')
+
+
+def get_app_root():
+    """
+    Return the application's persistent-data root directory.
+
+    Bundled exe → directory containing the .exe
+    Development  → current working directory (project root)
+    """
+    if _is_bundled():
+        return os.path.dirname(sys.executable)
+    return os.getcwd()
+
+
+def get_cache_dir():
+    """Return the cache directory path (absolute)."""
+    return os.path.join(get_app_root(), "cache")
+
+
+CONFIG_PATH = os.path.join(get_cache_dir(), "config.json")
 
 DEFAULTS = {
     "api_key": "",
@@ -18,6 +57,7 @@ DEFAULTS = {
     "only_chs": False,
     "remove_json": False,
     "use_remote_cache": True,
+    "threads": 0,  # 0 = auto (CPU-based)
 }
 
 

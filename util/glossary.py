@@ -11,6 +11,7 @@ Two roles:
 import os
 import re
 import json
+import sys
 import logging
 
 
@@ -21,13 +22,51 @@ import logging
 _glossary_cache = None
 
 
+def _find_glossary_path():
+    """
+    Resolve military_glossary.json path across environments:
+      - Development (running from source)
+      - Nuitka --standalone (folder with exe + bundled files)
+      - Nuitka --onefile   (temp extraction dir, needs --include-data-files)
+
+    Returns the first existing path, or the __file__-relative path as default.
+    """
+    candidates = []
+
+    # 1) __file__-relative (dev + Nuitka with data files included)
+    candidates.append(
+        os.path.join(os.path.dirname(__file__), "military_glossary.json")
+    )
+
+    # 2) Executable-relative (Nuitka onefile fallback)
+    if getattr(sys, 'frozen', False):
+        # PyInstaller
+        base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
+        candidates.append(os.path.join(base, "util", "military_glossary.json"))
+    else:
+        exe_dir = os.path.dirname(sys.executable)
+        candidates.append(os.path.join(exe_dir, "util", "military_glossary.json"))
+        candidates.append(os.path.join(exe_dir, "military_glossary.json"))
+
+    # 3) CWD-relative (last resort)
+    candidates.append(os.path.join("util", "military_glossary.json"))
+    candidates.append("military_glossary.json")
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    # Not found — return the primary path so the error message is clear
+    return candidates[0]
+
+
 def load_glossary():
     """Load the military glossary, cached in memory after first call."""
     global _glossary_cache
     if _glossary_cache is not None:
         return _glossary_cache
 
-    path = os.path.join(os.path.dirname(__file__), "military_glossary.json")
+    path = _find_glossary_path()
     with open(path, "r", encoding="utf-8") as f:
         _glossary_cache = json.load(f)
     return _glossary_cache
@@ -225,6 +264,7 @@ def correct_translations(original_dict, translated_dict, glossary=None):
 
     if corrections_made:
         logging.info("Glossary corrections: %d fix(es)", corrections_made)
-        print(f"  Glossary correction: {corrections_made} fix(es)")
+        from util.output import tlog
+        tlog(f"  Glossary correction: {corrections_made} fix(es)")
 
     return corrected
